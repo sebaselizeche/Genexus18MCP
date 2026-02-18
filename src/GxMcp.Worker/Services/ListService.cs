@@ -45,10 +45,28 @@ namespace GxMcp.Worker.Services
                     KBObject kbo = o as KBObject;
                     if (kbo != null)
                     {
-                        if (filters == null || filters.Any(f => kbo.TypeDescriptor.Name.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 || kbo.TypeDescriptor.Description.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0))
+                        bool matchesFilter = (filters == null);
+                        if (!matchesFilter)
                         {
-                            string shorthand = GetShorthand(kbo.TypeDescriptor.Name);
-                            objects.Add($"{shorthand}:{kbo.Name}");
+                            string kbName = kbo.Name;
+                            string typeName = kbo.TypeDescriptor.Name;
+                            string description = kbo.TypeDescriptor.Description;
+
+                            foreach (string f in filters)
+                            {
+                                if (kbName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    typeName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    description.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    matchesFilter = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (matchesFilter)
+                        {
+                            objects.Add($"{GetShorthand(kbo.TypeDescriptor.Name)}:{kbo.Name}");
                         }
                     }
                 }

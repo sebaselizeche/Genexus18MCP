@@ -51,6 +51,25 @@ namespace GxMcp.Worker.Services
             return _kb;
         }
 
+        public void Reload()
+        {
+            if (_kb != null)
+            {
+                try 
+                {
+                    _kb.Close();
+                }
+                catch (Exception ex) 
+                {
+                    Logger.Error($"[KbService] Error closing KB during reload: {ex.Message}");
+                }
+                _kb = null;
+                GC.Collect(); // Force cleanup
+                Logger.Info("[KbService] KB Closed and Reload triggered.");
+            }
+            EnsureKbOpen();
+        }
+
         private void EnsureKbOpen()
         {
             if (_kb != null) return;

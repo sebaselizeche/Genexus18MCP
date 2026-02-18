@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
 {
@@ -96,8 +97,17 @@ namespace GxMcp.Worker.Services
                 using (var p = Process.Start(psi))
                 {
                     string output = "";
-                    p.OutputDataReceived += (s, e) => { if (e.Data != null) { Console.Error.WriteLine($"[MSBuild] {e.Data}"); output += e.Data + "\n"; } };
-                    p.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.Error.WriteLine($"[MSBuild Error] {e.Data}"); };
+                    p.OutputDataReceived += (s, e) => { 
+                        if (e.Data != null) { 
+                            Logger.Info($"[MSBuild] {e.Data}"); 
+                            output += e.Data + "\n"; 
+                        } 
+                    };
+                    p.ErrorDataReceived += (s, e) => { 
+                        if (e.Data != null) {
+                            Logger.Error($"[MSBuild Error] {e.Data}");
+                        }
+                    };
                     p.BeginOutputReadLine();
                     p.BeginErrorReadLine();
                     p.WaitForExit();
@@ -210,8 +220,17 @@ namespace GxMcp.Worker.Services
             using (var p = Process.Start(psi))
             {
                 string output = "";
-                p.OutputDataReceived += (s, e) => { if(e.Data != null) { Console.Error.WriteLine($"[MSBuild] {e.Data}"); output += e.Data + "\n"; } };
-                p.ErrorDataReceived += (s, e) => { if(e.Data != null) Console.Error.WriteLine($"[MSBuild Error] {e.Data}"); };
+                p.OutputDataReceived += (s, e) => { 
+                    if(e.Data != null) { 
+                        Logger.Info($"[MSBuild] {e.Data}"); 
+                        output += e.Data + "\n"; 
+                    } 
+                };
+                p.ErrorDataReceived += (s, e) => { 
+                    if(e.Data != null) {
+                        Logger.Error($"[MSBuild Error] {e.Data}");
+                    }
+                };
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
                 p.WaitForExit();

@@ -1,8 +1,15 @@
 using System;
-using System.IO.Compression;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using System.Linq;
+using GxMcp.Worker.Helpers;
+using Artech.Architecture.Common.Objects;
+using Artech.Architecture.Common.Services;
+using Artech.Genexus.Common;
+using Artech.Genexus.Common.Objects;
+using Artech.Genexus.Common.Parts;
+using Attribute = Artech.Genexus.Common.Objects.Attribute;
 
 namespace GxMcp.Worker.Services
 {
@@ -21,111 +28,224 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                // Parse definition (expects JSON with Attributes and Structure)
-                // For simplicity, build the import XML directly
+                // Sanitize Name (remove Trn: prefix if present)
+                if (name.Contains(":"))
+                    name = name.Split(':')[1];
+
+                // Parse definition
                 var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
                 var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
                 var structure = def["Structure"]?.ToString();
 
-                // Phase 1: Create Attributes
-                var attXml = new StringBuilder("<Attributes>");
-                if (attributes != null)
-                {
-                    foreach (var att in attributes)
-                    {
-                        string attName = att["Name"]?.ToString();
-                        string attType = att["Type"]?.ToString() ?? "VarChar";
-                        string attLen = att["Length"]?.ToString() ?? "100";
-                        attXml.Append($"<Attribute name='{attName}' description='{attName}'><Properties>");
-                        attXml.Append($"<Property><Name>Name</Name><Value>{attName}</Value></Property>");
-                        attXml.Append($"<Property><Name>ATTCUSTOMTYPE</Name><Value>bas:{attType}</Value></Property>");
-                        attXml.Append($"<Property><Name>Length</Name><Value>{attLen}</Value></Property>");
-                        attXml.Append("</Properties></Attribute>");
-                    }
-                }
-                attXml.Append("</Attributes>");
-                ImportXml(attXml.ToString(), "temp_att");
+                // Native Creation Logic
+                Logger.Info($"[ForgeService] Starting Native Creation for Transaction '{name}'...");
+                CreateTransactionNative(name, attributes, structure);
+                Logger.Info($"[ForgeService] Native Transaction '{name}' created successfully.");
 
-                // Phase 2: Create Transaction
-                var structNodes = new StringBuilder();
-                if (structure != null)
-                {
-                    foreach (string line in structure.Split('\n'))
-                    {
-                        string trimmed = line.Trim();
-                        if (string.IsNullOrEmpty(trimmed)) continue;
-                        if (trimmed.EndsWith("*"))
-                        {
-                            string attName = trimmed.TrimEnd('*').Trim();
-                            structNodes.Append($"<Attribute key='True'>{attName}</Attribute>");
-                        }
-                        else
-                        {
-                            structNodes.Append($"<Attribute key='False'>{trimmed}</Attribute>");
-                        }
-                    }
-                }
-
-                // Transaction type GUID
-                string trnXml = $"<Objects><Object name='{name}' type='1db606f2-af09-4cf9-a3b5-b481519d28f6'>"
-                    + $"<Part type='264be5fb-1b28-4b25-a598-6ca900dd059f'>"
-                    + $"<Level Name='{name}' Type='{name}' Description='{name}'>{structNodes}</Level>"
-                    + "</Part>"
-                    + $"<Properties><Property><Name>Name</Name><Value>{name}</Value></Property></Properties>"
-                    + "</Object></Objects>";
-                ImportXml(trnXml, "temp_trn");
+                // Invalidate Cache to ensure ReadObject sees new parts
+                _objectService.Invalidate(name);
 
                 return _objectService.ReadObject(name);
             }
             catch (Exception ex)
             {
+                Logger.Error($"[ForgeService] CreateObject Failed: {ex.Message}\n{ex.StackTrace}");
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
-        private void ImportXml(string xmlBody, string fileName)
+        private void CreateTransactionNative(string name, Newtonsoft.Json.Linq.JArray attributes, string structure)
         {
-            string kbPath = _buildService.GetKBPath();
-            string gxDir = @"C:\Program Files (x86)\GeneXus\GeneXus18";
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var kb = _objectService.GetKB();
+            if (kb == null || kb.DesignModel == null)
+                throw new Exception("KB or DesignModel is not available.");
 
-            string xmlPath = Path.Combine(baseDir, fileName + ".xml");
-            string xpzPath = Path.Combine(baseDir, fileName + ".xpz");
-            string zipPath = Path.Combine(baseDir, fileName + ".zip");
+            KBModel model = kb.DesignModel;
 
-            // Wrap in ExportFile if needed
-            if (!xmlBody.TrimStart().StartsWith("<?xml"))
+            // 1. Create Attributes
+            if (attributes != null)
             {
-                xmlBody = "<?xml version='1.0' encoding='utf-8'?><ExportFile><KMW><MajorVersion>4</MajorVersion></KMW>"
-                    + xmlBody + "</ExportFile>";
-            }
-            File.WriteAllText(xmlPath, xmlBody, Encoding.UTF8);
+                foreach (var attToken in attributes)
+                {
+                    string attName = attToken["Name"]?.ToString();
+                    if (string.IsNullOrEmpty(attName)) continue;
 
-            // Create XPZ
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            if (File.Exists(xpzPath)) File.Delete(xpzPath);
-            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+                    // Check if exists
+                    Attribute existing = Attribute.Get(model, attName);
+                    if (existing == null)
+                    {
+                        Logger.Info($"[ForgeService] Creating Attribute '{attName}'...");
+                        Attribute att = new Attribute(model);
+                        att.Name = attName;
+                        att.Description = attName; // Default description
+                        
+                        string typeStr = attToken["Type"]?.ToString() ?? "VarChar";
+                        int len = int.Parse(attToken["Length"]?.ToString() ?? "40");
+                        int dec = int.Parse(attToken["Decimals"]?.ToString() ?? "0");
+
+                        att.Type = ParseType(typeStr);
+                        att.Length = len;
+                        if (att.Type == eDBType.NUMERIC)
+                            att.Decimals = dec;
+
+                        att.Save();
+                        Logger.Info($"[ForgeService] Attribute '{attName}' saved.");
+                    }
+                    else
+                    {
+                        Logger.Info($"[ForgeService] Attribute '{attName}' already exists.");
+                    }
+                }
+            }
+
+            // 2. Create Transaction
+            Transaction trn = Transaction.Get(model, new QualifiedName(name));
+            if (trn == null)
             {
-                archive.CreateEntryFromFile(xmlPath, Path.GetFileName(xmlPath));
+                Logger.Info($"[ForgeService] Creating Transaction '{name}' via Transaction.Create(model)...");
+                trn = Transaction.Create(model);
+                if (trn == null) throw new Exception("Failed to create Transaction object via Transaction.Create.");
+                
+                trn.Name = name;
+                trn.Description = name;
+                Logger.Info($"[ForgeService] New Transaction Type GUID: {trn.TypeDescriptor.Id}");
             }
-            File.Move(zipPath, xpzPath);
+            else
+            {
+                Logger.Info($"[ForgeService] Updating existing Transaction '{name}'...");
+            }
 
-            // Import via MSBuild
-            string targetsFile = Path.Combine(baseDir, fileName + ".targets");
-            string content = $@"<Project DefaultTargets='Import' xmlns='http://schemas.microsoft.com/developer/msbuild/2003'>
-                <Import Project='{gxDir}\Genexus.Tasks.targets' />
-                <Target Name='Import'>
-                    <OpenKnowledgeBase Directory='{kbPath}' />
-                    <Import File='{xpzPath}' />
-                </Target>
-            </Project>";
-            File.WriteAllText(targetsFile, content, Encoding.UTF8);
-            _buildService.RunMSBuild(targetsFile, "Import");
+            // 2.5 Ensure Parts Exist (Events, Rules, WebForm)
+            if (trn.Parts.Get<EventsPart>() == null)
+            {
+                Logger.Info($"[ForgeService] Adding EventsPart to '{name}'...");
+                var p = new EventsPart(trn);
+                p.Source = "Event Start\n    // Init\nEndEvent";
+                try 
+                { 
+                    trn.Parts.Add(p.Type, p); 
+                    p.Save(); // Explicit Save
+                    Logger.Info($"[ForgeService] EventsPart added and saved.");
+                } 
+                catch (Exception ex) 
+                {
+                    Logger.Error($"[ForgeService] Failed to add EventsPart: {ex.Message}");
+                }
+            }
 
-            // Cleanup
-            File.Delete(xmlPath);
-            File.Delete(xpzPath);
-            File.Delete(targetsFile);
+            if (trn.Parts.Get<RulesPart>() == null)
+            {
+                Logger.Info($"[ForgeService] Adding RulesPart to '{name}'...");
+                var p = new RulesPart(trn);
+                p.Source = "// Rules";
+                try 
+                { 
+                    trn.Parts.Add(p.Type, p); 
+                    p.Save(); // Explicit Save
+                } 
+                catch (Exception ex)
+                {
+                    Logger.Error($"[ForgeService] Failed to add RulesPart: {ex.Message}");
+                }
+            }
+
+            if (trn.Parts.Get<WebFormPart>() == null)
+            {
+                Logger.Info($"[ForgeService] Adding WebFormPart to '{name}'...");
+                var p = new WebFormPart(trn);
+                try 
+                { 
+                    trn.Parts.Add(p.Type, p); 
+                    p.Save(); // Explicit Save
+                } 
+                catch (Exception ex)
+                {
+                    Logger.Error($"[ForgeService] Failed to add WebFormPart: {ex.Message}");
+                }
+            }
+
+            // 3. Set Structure
+            if (structure != null)
+            {
+                // Clear existing structure if needed? 
+                // For now, let's assume we are appending or defining new.
+                // Depending on SDK, modifying structure might be adding levels/attributes.
+                
+                // We need to access the Root level
+                TransactionLevel root = trn.Structure.Root;
+                
+                foreach (string line in structure.Split('\n'))
+                {
+                    string trimmed = line.Trim();
+                    if (string.IsNullOrEmpty(trimmed)) continue;
+
+                    string attName = trimmed;
+                    bool isKey = false;
+                    
+                    if (trimmed.EndsWith("*"))
+                    {
+                        isKey = true;
+                        attName = trimmed.TrimEnd('*').Trim();
+                    }
+
+                    Attribute att = Attribute.Get(model, attName);
+                    if (att != null)
+                    {
+                        // AddAttribute returns TransactionAttribute or void? Reflection said:
+                        // Void AddAttribute(Artech.Genexus.Common.Parts.TransactionAttribute)
+                        // Artech.Genexus.Common.Parts.TransactionAttribute AddAttribute(Artech.Genexus.Common.Objects.Attribute)
+                        
+                        // Safe add
+                        bool exists = false;
+                        foreach (var ta in root.Attributes)
+                        {
+                            if (ta.Name == attName) { exists = true; break; }
+                        }
+
+                        if (!exists)
+                        {
+                            try
+                            {
+                                var trnAtt = root.AddAttribute(att);
+                                if (trnAtt != null)
+                                {
+                                    trnAtt.IsKey = isKey;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Info($"[ForgeService] AddAttribute warning for '{attName}': {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                             // Update existing? For now, just ensure key status if needed, but safe to skip.
+                        }
+                    }
+                    else
+                    {
+                        Logger.Error($"[ForgeService] Attribute '{attName}' not found in KB. Skipping.");
+                    }
+                }
+            }
+
+            trn.Save();
+            Logger.Info($"[ForgeService] Transaction '{name}' saved. Final Type GUID: {trn.TypeDescriptor.Id}");
+        }
+
+        private eDBType ParseType(string typeStr)
+        {
+            switch (typeStr.ToLower())
+            {
+                case "numeric": return eDBType.NUMERIC;
+                case "varchar": return eDBType.VARCHAR;
+                case "character": return eDBType.CHARACTER;
+                case "date": return eDBType.DATE;
+                case "datetime": return eDBType.DATETIME;
+                case "boolean": return eDBType.Boolean;
+                case "longvarchar": return eDBType.LONGVARCHAR;
+                default: return eDBType.VARCHAR;
+            }
         }
     }
 }

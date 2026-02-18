@@ -4,7 +4,7 @@ A high-performance **Model Context Protocol (MCP)** server for GeneXus 18, enabl
 
 ## 🌟 Key Features
 
-- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.* DLLs) for deep analysis and manipulation.
+- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.\* DLLs) for deep analysis and manipulation.
 - **Robust Assembly Resolution**: Automatically loads GeneXus packages and patterns from your installation folder.
 - **x86 Architecture**: Optimized for the 32-bit GeneXus environment.
 - **Structured Output**: All tools return optimized JSON for AI consumption (clean logs, diffs, metadata).
@@ -70,6 +70,14 @@ Detailed tool definitions are available in `GEMINI.md`.
 - **Writer**: `genexus_create_object`, `genexus_write_object`, `genexus_refactor`, `genexus_batch`
 - **DevOps**: `genexus_build`, `genexus_doctor`, `genexus_history`, `genexus_wiki`
 
+## 📁 Repository Structure
+
+- `src/`: Source code for Gateway and Worker.
+- `publish/`: Compiled binaries and configuration.
+- `docs/`: In-depth technical insights and research.
+  - [Native SDK Insights](docs/native_sdk_insights.md): The definitive guide to GUIDs, Collisions, and Persistence.
+- `scripts/`: Curated diagnostic and discovery PowerShell tools.
+
 ## 🏗️ Architecture
 
 ```mermaid
@@ -79,4 +87,4 @@ graph LR
     C --Native SDK--> D[GeneXus 18 KB]
 ```
 
-For more technical details on how the SDK integration was stabilized, see [docs/sdk_integration_stabilization.md](docs/sdk_integration_stabilization.md).
+For more technical details on how the SDK integration was stabilized, see [docs/native_sdk_insights.md](docs/native_sdk_insights.md).

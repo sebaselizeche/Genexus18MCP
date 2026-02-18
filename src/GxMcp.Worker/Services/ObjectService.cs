@@ -31,11 +31,22 @@ namespace GxMcp.Worker.Services
             _kbService = kbService;
         }
 
+        public KnowledgeBase GetKB()
+        {
+            return _kbService.GetKB();
+        }
+
         public void ClearCache()
         {
             _cache.Clear();
             _lru.Clear();
             Console.Error.WriteLine("[ObjectService] Cache cleared.");
+        }
+
+        public void Reload()
+        {
+            ClearCache();
+            _kbService.Reload();
         }
 
         private KnowledgeBase EnsureKbOpen()
@@ -65,26 +76,48 @@ namespace GxMcp.Worker.Services
             return "";
         }
 
-        private KBObject FindObject(string name)
+        public Guid GetObjectId(string name)
+        {
+            var obj = FindObject(name);
+            return obj != null ? obj.Guid : Guid.Empty;
+        }
+
+        private KBObject FindObject(string target)
         {
             var kb = EnsureKbOpen();
-            Console.Error.WriteLine($"[ObjectService] FindObject starting for: {name}");
-            if (kb == null) { Console.Error.WriteLine("[ObjectService] ERROR: kb is NULL"); return null; }
-            if (kb.DesignModel == null) { Console.Error.WriteLine("[ObjectService] ERROR: kb.DesignModel is NULL"); return null; }
+            if (kb == null) return null;
+
+            string namePart = target;
+            Guid? expectedType = null;
+
+            if (target.Contains(":"))
+            {
+                var split = target.Split(':');
+                string prefix = split[0].ToLower();
+                namePart = split[1];
+
+                if (prefix == "trn") expectedType = Artech.Genexus.Common.ObjClass.Transaction;
+                else if (prefix == "prc") expectedType = Artech.Genexus.Common.ObjClass.Procedure;
+                else if (prefix == "wp" || prefix == "webpanel") expectedType = Artech.Genexus.Common.ObjClass.WebPanel;
+                else if (prefix == "att" || prefix == "attribute") expectedType = Artech.Genexus.Common.ObjClass.Attribute;
+                else if (prefix == "tbl" || prefix == "table") expectedType = Artech.Genexus.Common.ObjClass.Table;
+                else if (prefix == "dom" || prefix == "domain") expectedType = Artech.Genexus.Common.ObjClass.Domain;
+            }
 
             var objects = kb.DesignModel.Objects as IEnumerable;
-            if (objects == null) { Console.Error.WriteLine("[ObjectService] ERROR: kb.DesignModel.Objects is NULL"); return null; }
+            if (objects == null) return null;
 
             foreach (object o in objects)
             {
                 KBObject kbo = o as KBObject;
-                if (kbo != null && string.Equals(kbo.Name, name, StringComparison.OrdinalIgnoreCase))
+                if (kbo != null && string.Equals(kbo.Name, namePart, StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.Error.WriteLine($"[ObjectService] Object FOUND: {kbo.Name} (Guid: {kbo.Guid})");
-                    return kbo;
+                    if (expectedType == null || kbo.Type == expectedType.Value)
+                    {
+                        return kbo;
+                    }
                 }
             }
-            Console.Error.WriteLine($"[ObjectService] Object NOT FOUND: {name}");
             return null;
         }
 
@@ -101,14 +134,7 @@ namespace GxMcp.Worker.Services
 
             EnsureKbOpen();
 
-            string namePart = target;
-            if (target.Contains(":"))
-            {
-                var split = target.Split(':');
-                namePart = split[1];
-            }
-
-            KBObject obj = FindObject(namePart);
+            KBObject obj = FindObject(target);
             if (obj == null) return null;
 
             try 
@@ -139,6 +165,17 @@ namespace GxMcp.Worker.Services
                             {
                                 var innerProp = element.GetType().GetProperty("InnerXml");
                                 innerXml = innerProp?.GetValue(element, null) as string ?? "";
+                            }
+
+                            // Fallback/Override with Source property if it's a string (standard for Procedures/Events)
+                            var sourceProp = p.GetType().GetProperty("Source");
+                            if (sourceProp != null)
+                            {
+                                var sourceVal = sourceProp.GetValue(p, null);
+                                if (sourceVal is string s && !string.IsNullOrEmpty(s))
+                                {
+                                    innerXml = s;
+                                }
                             }
                         }
                         catch { }
