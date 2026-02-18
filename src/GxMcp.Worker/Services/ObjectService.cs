@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
 using System.Text;
+using System.Collections.Generic;
 
 namespace GxMcp.Worker.Services
 {
@@ -19,8 +20,25 @@ namespace GxMcp.Worker.Services
             _kbPath = _buildService.GetKBPath();
         }
 
+        // Cache: Key=ObjectName, Value=XmlContent
+        private static readonly System.Collections.Generic.Dictionary<string, string> _cache = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly System.Collections.Generic.List<string> _lru = new System.Collections.Generic.List<string>();
+        private const int MAX_CACHE_SIZE = 50;
+
         public string GetObjectXml(string target)
         {
+            if (string.IsNullOrEmpty(target)) return null;
+
+            // Check Cache
+            if (_cache.ContainsKey(target))
+            {
+                // Update LRU
+                _lru.Remove(target);
+                _lru.Add(target);
+                Console.Error.WriteLine($"[ObjectService] Cache Hit: {target}");
+                return _cache[target];
+            }
+
             // Logic: Export to XPZ -> Unzip -> Read XML
             string tempXpz = Path.GetTempFileName() + ".xpz";
             string targetsFile = Path.GetTempFileName() + ".targets";
@@ -49,6 +67,18 @@ namespace GxMcp.Worker.Services
                         // Cleanup
                         Directory.Delete(extractDir, true);
                         File.Delete(tempXpz);
+
+                        // Update Cache
+                        if (_cache.Count >= MAX_CACHE_SIZE)
+                        {
+                            string oldest = _lru[0];
+                            _lru.RemoveAt(0);
+                            _cache.Remove(oldest);
+                        }
+                        _cache[target] = content;
+                        _lru.Add(target);
+                        Console.Error.WriteLine($"[ObjectService] Cache Miss: {target} (Stored)");
+
                         return content; // Return raw XML
                     }
                 }
@@ -65,6 +95,23 @@ namespace GxMcp.Worker.Services
                 if (File.Exists(targetsFile)) File.Delete(targetsFile);
                 if (File.Exists(tempXpz)) File.Delete(tempXpz);
             }
+        }
+
+        public void Invalidate(string target)
+        {
+            if (_cache.ContainsKey(target))
+            {
+                _cache.Remove(target);
+                _lru.Remove(target);
+                Console.Error.WriteLine($"[ObjectService] Invalidated: {target}");
+            }
+        }
+
+        public void ClearCache()
+        {
+            _cache.Clear();
+            _lru.Clear();
+            Console.Error.WriteLine($"[ObjectService] Cache Cleared");
         }
 
         public string ReadObject(string target)

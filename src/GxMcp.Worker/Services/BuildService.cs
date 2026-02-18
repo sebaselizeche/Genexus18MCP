@@ -215,6 +215,10 @@ namespace GxMcp.Worker.Services
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
                 p.WaitForExit();
+                if (p.ExitCode != 0)
+                {
+                    throw new Exception($"MSBuild failed with exit code {p.ExitCode}. Output: {output}");
+                }
                 return output;
             }
         }

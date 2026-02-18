@@ -58,6 +58,9 @@ namespace GxMcp.Worker.Services
                 ImportXpz(tempXml);
                 File.Delete(tempXml);
 
+                // Invalidate Cache
+                _objectService.Invalidate(target);
+
                 return _objectService.ParseGenerusXmlToJson(doc.OuterXml);
             }
             catch (Exception ex)

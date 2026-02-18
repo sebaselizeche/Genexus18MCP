@@ -142,9 +142,11 @@ namespace GxMcp.Worker.Services
             File.Delete(targetsFile);
             Directory.Delete(batchDir, true);
 
-            var names = files.Select(f => "\"" + CommandDispatcher.EscapeJsonString(Path.GetFileNameWithoutExtension(f).Replace("_", ":")) + "\"");
+            // Invalidate all cache as batch import might touch anything
+            _objectService.ClearCache();
 
-            return "{\"status\": \"Batch committed\", \"objectCount\": " + files.Length + ", \"committedObjects\": [" + string.Join(",", names) + "]}";
+            var finalNames = files.Select(f => "\"" + CommandDispatcher.EscapeJsonString(Path.GetFileNameWithoutExtension(f).Replace("_", ":")) + "\"");
+            return "{\"status\": \"Batch committed\", \"objectCount\": " + files.Length + ", \"committedObjects\": [" + string.Join(",", finalNames) + "]}";
         }
     }
 }

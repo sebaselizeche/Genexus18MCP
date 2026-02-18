@@ -54,8 +54,8 @@ namespace GxMcp.Worker.Services
                 // Semantic tags
                 var tags = GetTags(target, fullCode);
 
-                // Code insights (reviewer)
-                var insights = GetInsights(fullCode);
+                // Quality Check (Linter)
+                var insights = AnalyzeQuality(fullCode);
 
                 // Complexity Score
                 int complexity = CalculateComplexity(fullCode);
@@ -107,23 +107,45 @@ namespace GxMcp.Worker.Services
             return tags.Distinct().ToList();
         }
 
-        private List<Tuple<string, string>> GetInsights(string code)
+        private List<Tuple<string, string>> AnalyzeQuality(string code)
         {
-            var insights = new List<Tuple<string, string>>();
+            var issues = new List<Tuple<string, string>>();
 
-            if (Regex.IsMatch(code, @"(?s)for each.*?for each"))
-                insights.Add(Tuple.Create("Warning", "Nested loop detected. Potential N+1 query performance risk."));
+            // Rule 1: Commit inside Loop (Critical)
+            // Using RegexOptions.Singleline to match across newlines
+            if (Regex.IsMatch(code, @"\bFor\s+each.*?\bCommit\b.*?\bEndFor\b", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                issues.Add(Tuple.Create("Critical", "COMMIT command detected inside a LOOP. This causes severe performance degradation and database locking issues. Move the Commit outside the loop."));
+            }
 
-            if (Regex.IsMatch(code, @"for each") && !Regex.IsMatch(code, @"where"))
-                insights.Add(Tuple.Create("Critical", "Loop without WHERE clause. High risk of Full Table Scan."));
+            // Rule 2: Sleep/Wait (Warning)
+            if (Regex.IsMatch(code, @"\b(Sleep|Wait)\s*\(", RegexOptions.IgnoreCase))
+            {
+                issues.Add(Tuple.Create("Warning", "Sleep/Wait function detected. This blocks the thread and ruins User Experience. Use a Timer or asynchronous pattern if possible."));
+            }
 
-            if (Regex.IsMatch(code, @"(?s)for each.*?commit.*?endfor"))
-                insights.Add(Tuple.Create("Critical", "COMMIT inside loop. Severe performance impact."));
+            // Rule 3: Dynamic Calls (Warning)
+            if (Regex.IsMatch(code, @"\bCall\s*\(\s*&", RegexOptions.IgnoreCase))
+            {
+                issues.Add(Tuple.Create("Warning", "Dynamic CALL detected (calling a variable). This breaks reference tracking and dependency analysis. Avoid if possible."));
+            }
 
-            if (Regex.IsMatch(code, @"https?://"))
-                insights.Add(Tuple.Create("Warning", "Hardcoded URL detected. Use Location object."));
+            // Rule 4: New without When Duplicate (Info)
+            // Matches 'New' ... 'EndNew' where 'When duplicate' is NOT inside
+            var newBlocks = Regex.Matches(code, @"\bNew\b.*?\bEndNew\b", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            foreach (Match match in newBlocks)
+            {
+                if (!Regex.IsMatch(match.Value, @"\bWhen\s+duplicate\b", RegexOptions.IgnoreCase))
+                {
+                    issues.Add(Tuple.Create("Info", "NEW command block found without WHEN DUPLICATE clause. Ensure you are handling unique constraint violations."));
+                }
+            }
+            
+            // Rule 5: Unfiltered Loop (Critical)
+             if (Regex.IsMatch(code, @"\bFor\s+each\b", RegexOptions.IgnoreCase) && !Regex.IsMatch(code, @"\bwhere\b", RegexOptions.IgnoreCase))
+                issues.Add(Tuple.Create("Critical", "Loop without WHERE clause detected. High risk of Full Table Scan."));
 
-            return insights;
+            return issues;
         }
 
         private int CalculateComplexity(string code)

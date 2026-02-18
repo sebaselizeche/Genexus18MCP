@@ -1,5 +1,11 @@
 # Protocolo GeneXus MCP Nirvana (Sentient Edition v18.5)
 
+> [!IMPORTANT]
+> **Skills Required**: Before performing ANY task in this repo, the agent MUST load and follow:
+>
+> 1. `[GeneXus MCP Mastery](file:///.gemini/skills/genexus-mastery/SKILL.md)` - For tool performance and cache usage.
+> 2. `[GeneXus 18 Guidelines](file:///.gemini/skills/genexus18-guidelines/SKILL.md)` - For official GeneXus development rules.
+
 ## 🏗️ Architecture: Dual-Process .NET
 
 1.  **Gateway (.NET 8)**: `GxMcp.Gateway.exe`. Handles MCP protocol, Stdio, and process orchestration.

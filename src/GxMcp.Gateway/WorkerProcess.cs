@@ -85,13 +85,39 @@ namespace GxMcp.Gateway
 
         public async Task SendCommandAsync(string jsonRpc)
         {
+            // Ensure process is running
             if (_process == null || _process.HasExited)
             {
-                Start(); // Auto-restart
+                Console.Error.WriteLine("[Gateway] Worker not running. Starting...");
+                Start();
             }
             
-            await _process.StandardInput.WriteLineAsync(jsonRpc);
-            await _process.StandardInput.FlushAsync();
+            try 
+            {
+                await _process.StandardInput.WriteLineAsync(jsonRpc);
+                await _process.StandardInput.FlushAsync();
+            }
+            catch (Exception ex) when (ex is IOException || ex is InvalidOperationException)
+            {
+                Console.Error.WriteLine($"[Gateway] Worker communication failed: {ex.Message}. Restarting and retrying...");
+                
+                // Circuit Breaker: Restart
+                Stop();
+                Start();
+                
+                // Retry once
+                try 
+                {
+                     await _process.StandardInput.WriteLineAsync(jsonRpc);
+                     await _process.StandardInput.FlushAsync();
+                     Console.Error.WriteLine("[Gateway] Retry successful.");
+                }
+                catch (Exception retryEx)
+                {
+                    Console.Error.WriteLine($"[Gateway] Retry failed: {retryEx.Message}");
+                    throw; // Give up
+                }
+            }
         }
 
         public void Stop()
