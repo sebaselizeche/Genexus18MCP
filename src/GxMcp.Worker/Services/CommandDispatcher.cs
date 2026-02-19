@@ -57,6 +57,11 @@ namespace GxMcp.Worker.Services
                 Console.Error.WriteLine($"[Worker] Executable: {exePath}");
                 Console.Error.WriteLine($"[Worker] Dispatching: {module} / {action} / {target}");
 
+
+                string debugLog = $"[Worker] Dispatching: Mod={module} Act={action} Tgt={target} Prt={part} Pay={payload}";
+                Console.Error.WriteLine(debugLog);
+                try { System.IO.File.AppendAllText("C:\\Projetos\\GenexusMCP\\worker_debug.log", debugLog + Environment.NewLine); } catch {}
+
                 switch (module?.ToLower())
                 {
                     case "build":
@@ -65,9 +70,15 @@ namespace GxMcp.Worker.Services
                         return _buildService.Execute(action ?? module, target);
 
                     case "read":
+                        if (string.Equals(action, "ExtractSource", StringComparison.OrdinalIgnoreCase)) return _objectService.ReadObjectSource(target, part);
+                        if (string.Equals(action, "ReadSection", StringComparison.OrdinalIgnoreCase)) return _objectService.ReadObjectSection(target, part, payload);
                         return _objectService.ReadObject(target);
 
                     case "write":
+                        if (string.Equals(action, "WriteSection", StringComparison.OrdinalIgnoreCase)) {
+                            string sectionName = prms?["section"]?.ToString();
+                            return _writeService.WriteObjectSection(target, part, sectionName, payload);
+                        }
                         return _writeService.WriteObject(target, part ?? action, payload);
 
                     case "listobjects":
@@ -76,6 +87,7 @@ namespace GxMcp.Worker.Services
                         return _listService.ListObjects(target, limit, offset);
 
                     case "analyze":
+                        if (string.Equals(action, "ListSections", StringComparison.OrdinalIgnoreCase)) return _analyzeService.ListSections(target, part);
                         return _analyzeService.Analyze(target);
 
                     case "forge":

@@ -68,15 +68,17 @@ namespace GxMcp.Worker.Services
                 var topResults = results
                     .OrderByDescending(r => r.Score)
                     .Take(50)
-                    .Select(r => new {
-                        name = r.Entry.Name,
-                        type = r.Entry.Type,
-                        score = r.Score,
-                        domain = r.Entry.BusinessDomain ?? "Geral",
-                        rules = r.Entry.Rules,
-                        tags = r.Entry.Tags,
-                        snippet = CommandDispatcher.EscapeJsonString(r.Entry.SourceSnippet ?? ""),
-                        connections = r.Entry.Calls.Count + r.Entry.CalledBy.Count
+                    .Select(r => {
+                        var dict = new Dictionary<string, object>();
+                        dict["name"] = r.Entry.Name;
+                        dict["type"] = r.Entry.Type;
+                        dict["score"] = r.Score;
+                        if (r.Entry.BusinessDomain != null && r.Entry.BusinessDomain != "Geral") dict["domain"] = r.Entry.BusinessDomain;
+                        if (r.Entry.Rules != null && r.Entry.Rules.Count > 0) dict["rules"] = r.Entry.Rules;
+                        if (r.Entry.Tags != null && r.Entry.Tags.Count > 0) dict["tags"] = r.Entry.Tags;
+                        if (!string.IsNullOrEmpty(r.Entry.SourceSnippet)) dict["snippet"] = CommandDispatcher.EscapeJsonString(r.Entry.SourceSnippet);
+                        dict["connections"] = r.Entry.Calls.Count + r.Entry.CalledBy.Count;
+                        return dict;
                     })
                     .ToList();
 

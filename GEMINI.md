@@ -63,6 +63,52 @@
 - **Params**: `domain` (Optional: Filter by business domain like 'Financeiro').
 - **Output**: Returns the file path to the generated HTML visualizer.
 
+## ⚡ Granular Access Tools (IDE-Free Editing)
+
+These tools are essential for the "Zero-IDE" experience, allowing you to read and write specific parts of large objects without overhead.
+
+### 8. `genexus_read_source`
+
+**Purpose**: Reads ONLY the source code of a part (Source, Rules, Events), skipping XML definitions.
+
+- **Params**: `name`, `part` (default: Source).
+
+### 9. `genexus_list_sections`
+
+**Purpose**: Lists all Subroutines and Events in an object source.
+
+- **Params**: `name`, `part`.
+
+### 10. `genexus_read_section`
+
+**Purpose**: Reads a specific Subroutine or Event.
+
+- **Params**: `name`, `section`.
+
+### 11. `genexus_write_section`
+
+**Purpose**: Surgically updates a specific Subroutine or Event.
+
+- **Params**: `name`, `section`, `code`.
+
+## 🚀 "IDE-Free" Workflow Strategy
+
+To achieve a complete development cycle without opening the GeneXus IDE, follow this mapping:
+
+| Task             | IDE Action                | MCP Tool to Use                                                          |
+| ---------------- | ------------------------- | ------------------------------------------------------------------------ |
+| **Discovery**    | KB Explorer / Ctrl+J      | `genexus_search` (semantic) or `genexus_list_objects` (fast list)        |
+| **Analysis**     | References / View Objects | `genexus_analyze` (deep insights) or `genexus_visualize` (graph)         |
+| **Reading**      | Double-Click Object       | `genexus_read_source` (lightweight) or `genexus_read_object` (full XML)  |
+| **Editing**      | Modify Code Editor        | `genexus_write_section` (surgical) or `genexus_write_object` (full part) |
+| **New Features** | File > New Object         | `genexus_create_object` (creates Transaction + Structure)                |
+| **Build**        | F5 / Build                | `genexus_build` (supports Build, Sync, Reorg)                            |
+| **Debugging**    | View Output Windows       | `genexus_doctor` (analyzes build logs for errors)                        |
+| **Refactoring**  | Find/Replace / Cleaning   | `genexus_refactor` (automated cleanup)                                   |
+
+> [!TIP]
+> **Pro Workflow**: Use `genexus_search` to find relevant objects, `genexus_list_sections` to map their internal structure, and `genexus_read_section` to fetch only the context you need. This keeps your token usage low and speed high.
+
 ## 🧠 Intelligence & Best Practices (v18.7)
 
 - **In-Memory Cache**: The search index is cached in the Worker's RAM after the first access, enabling sub-millisecond object lookups.

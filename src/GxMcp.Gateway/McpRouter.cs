@@ -213,6 +213,63 @@ namespace GxMcp.Gateway
                             name = new { type = "string", description = "Optional: Filter by exact or partial name" }
                         }
                     }
+                },
+
+                // === Tier 3: Granular Access Tools ===
+
+                new {
+                    name = "genexus_read_source",
+                    description = "Returns ONLY the plain text source of a specific part, significantly reducing token usage.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            name = new { type = "string", description = "Object name (e.g. 'Prc:MyProc')" },
+                            part = new { type = "string", description = "Part to read: Source, Rules, or Events. Default: Source" }
+                        },
+                        required = new[] { "name" }
+                    }
+                },
+
+                new {
+                    name = "genexus_list_sections",
+                    description = "Lists all Subroutines and Events within an object part.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            name = new { type = "string", description = "Object name" },
+                            part = new { type = "string", description = "Part to scan: Source, Rules, or Events" }
+                        },
+                        required = new[] { "name" }
+                    }
+                },
+
+                new {
+                    name = "genexus_read_section",
+                    description = "Reads a specific Subroutine or Event block from an object.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            name = new { type = "string", description = "Object name" },
+                            part = new { type = "string", description = "Part to read from" },
+                            section = new { type = "string", description = "Name of the Subroutine (e.g. 'ProcessData') or Event (e.g. 'Start')" }
+                        },
+                        required = new[] { "name", "section" }
+                    }
+                },
+
+                new {
+                    name = "genexus_write_section",
+                    description = "Surgically updates a specific Subroutine or Event within an object, avoiding full source rewrites.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            name = new { type = "string", description = "Object name" },
+                            part = new { type = "string", description = "Part to modify" },
+                            section = new { type = "string", description = "Name of the selection to replace" },
+                            code = new { type = "string", description = "The new code for this specific section" }
+                        },
+                        required = new[] { "name", "section", "code" }
+                    }
                 }
             };
         }
@@ -331,6 +388,41 @@ namespace GxMcp.Gateway
                         action = "Generate",
                         target = vizArgs["domain"].ToString(),
                         payload = vizArgs.ToString(Formatting.None)
+                    };
+
+                case "genexus_read_source":
+                    return new {
+                        module = "Read",
+                        action = "ExtractSource",
+                        target = args?["name"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source"
+                    };
+
+                case "genexus_list_sections":
+                    return new {
+                        module = "Analyze",
+                        action = "ListSections",
+                        target = args?["name"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source"
+                    };
+
+                case "genexus_read_section":
+                    return new {
+                        module = "Read",
+                        action = "ReadSection",
+                        target = args?["name"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source",
+                        payload = args?["section"]?.ToString()
+                    };
+
+                case "genexus_write_section":
+                    return new {
+                        module = "Write",
+                        action = "WriteSection",
+                        target = args?["name"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source",
+                        payload = args?["code"]?.ToString(),
+                        section = args?["section"]?.ToString()
                     };
 
                 default:

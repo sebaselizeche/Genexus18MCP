@@ -30,41 +30,20 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                // Detect type and route
-                if (name.StartsWith("Trn:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Transaction:", StringComparison.OrdinalIgnoreCase))
-                {
-                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
-                    
-                    // Parse definition only for Transactions for now
-                    var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
-                    var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
-                    var structure = def["Structure"]?.ToString();
+                // Parse definition
+                var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
+                var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
+                var structure = def["Structure"]?.ToString();
 
-                    Logger.Info($"[ForgeService] Starting Native Creation for Transaction '{safeName}'...");
-                    CreateTransactionNative(safeName, attributes, structure);
-                }
-                else if (name.StartsWith("Wbp:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("WebPanel:", StringComparison.OrdinalIgnoreCase))
-                {
-                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
-                    Logger.Info($"[ForgeService] Starting Native Creation for WebPanel '{safeName}'...");
-                    CreateWebPanelNative(safeName);
-                }
-                else if (name.StartsWith("Prc:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Procedure:", StringComparison.OrdinalIgnoreCase))
-                {
-                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
-                    Logger.Info($"[ForgeService] Starting Native Creation for Procedure '{safeName}'...");
-                    CreateProcedureNative(safeName);
-                }
-                else
+                if (!name.Contains(":"))
                 {
                     // Default to Transaction for backward compatibility if no prefix
                     Logger.Info($"[ForgeService] No prefix detected. Defaulting to Transaction for '{name}'...");
-
-                    var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
-                    var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
-                    var structure = def["Structure"]?.ToString();
-
                     CreateTransactionNative(name, attributes, structure);
+                }
+                else
+                {
+                     CreateObjectNative(name, attributes, structure);
                 }
 
                 Logger.Info($"[ForgeService] Native object '{name}' handled successfully.");
@@ -288,23 +267,158 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        // This method is assumed to be the dispatcher for object creation based on name prefix
+        // The provided snippet for routing is integrated here.
+        private void CreateObjectNative(string name, Newtonsoft.Json.Linq.JArray attributes, string structure)
+        {
+            var kb = _objectService.GetKB();
+            if (kb == null || kb.DesignModel == null)
+                throw new Exception("KB or DesignModel is not available.");
+
+            KBModel model = kb.DesignModel;
+
+            if (name.StartsWith("Trn:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Transaction:", StringComparison.OrdinalIgnoreCase))
+            {
+                string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                Logger.Info($"[ForgeService] Starting Native Creation for Transaction '{safeName}'...");
+                CreateTransactionNative(safeName, attributes, structure);
+            }
+            else if (name.StartsWith("Wbp:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("WebPanel:", StringComparison.OrdinalIgnoreCase))
+            {
+                string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                Logger.Info($"[ForgeService] Starting Native Creation for WebPanel '{safeName}'...");
+                CreateWebPanelNative(safeName);
+            }
+            else if (name.StartsWith("Dpr:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("DataProvider:", StringComparison.OrdinalIgnoreCase))
+            {
+                string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                Logger.Info($"[ForgeService] Starting Native Creation for DataProvider '{safeName}'...");
+                CreateDataProviderNative(safeName);
+            }
+            else if (name.StartsWith("Sdt:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("SDT:", StringComparison.OrdinalIgnoreCase))
+            {
+                string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                Logger.Info($"[ForgeService] Starting Native Creation for SDT '{safeName}'...");
+                CreateSDTNative(safeName);
+            }
+            else if (name.StartsWith("Prc:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Procedure:", StringComparison.OrdinalIgnoreCase))
+            {
+                string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                Logger.Info($"[ForgeService] Starting Native Creation for Procedure '{safeName}'...");
+                CreateProcedureNative(safeName);
+            }
+            else
+            {
+                Logger.Error($"[ForgeService] Unknown object type prefix for '{name}'. Cannot create object.");
+                throw new Exception($"Unknown object type prefix for '{name}'.");
+            }
+        }
+
         private void CreateProcedureNative(string name)
         {
             var kb = _objectService.GetKB();
             KBModel model = kb.DesignModel;
 
             Procedure prc = Procedure.Get(model, new QualifiedName(name));
+            bool created = false;
             if (prc == null)
             {
                 prc = Procedure.Create(model);
                 prc.Name = name;
                 prc.Description = name;
-                prc.Save();
-                Logger.Info($"[ForgeService] Procedure '{name}' created.");
+                created = true;
+            }
+
+            // Ensure Parts
+            if (prc.Parts.Get<ProcedurePart>() == null)
+            {
+                var p = new ProcedurePart(prc);
+                prc.Parts.Add(p.Type, p);
+            }
+            
+            // Populate Source if new
+            if (created)
+            {
+                var source = prc.Parts.Get<ProcedurePart>();
+                if (source != null) source.Source = "// Procedure Source\n// Created via MCP Forge\n\nFor Each\n    // Sample Loop\nEndfor";
+
+                var rules = prc.Parts.Get<RulesPart>(); // Procedures usually have rules
+                if (rules == null) {
+                    rules = new RulesPart(prc);
+                    prc.Parts.Add(rules.Type, rules);
+                }
+                rules.Source = "// Rules\nparm(in:&Input);";
+                
+                // Add variable for test
+                try {
+                    var vPart = prc.Parts.Get<VariablesPart>();
+                     if (vPart == null) { vPart = new VariablesPart(prc); prc.Parts.Add(vPart.Type, vPart); }
+                    
+                    // Logic to add variable if simple Add is available, else skip complex logic
+                    // Keeping it simple: Just source for now.
+                } catch {}
+            }
+
+            prc.Save();
+            Logger.Info($"[ForgeService] Procedure '{name}' handled (Created: {created}).");
+        }
+
+        private void CreateDataProviderNative(string name)
+        {
+            var kb = _objectService.GetKB();
+            KBModel model = kb.DesignModel;
+
+            DataProvider dpr = DataProvider.Get(model, new QualifiedName(name));
+            bool created = false;
+            if (dpr == null)
+            {
+                dpr = new DataProvider(model);
+                dpr.Name = name;
+                dpr.Description = name;
+                created = true;
+            }
+
+            // Ensure Source Part (DataProviderPart)
+            /* if (dpr.Parts.Get<DataProviderPart>() == null)
+            {
+                var p = new DataProviderPart(dpr);
+                dpr.Parts.Add(p.Type, p);
+            } */
+
+            if (created)
+            {
+                /* var source = dpr.Parts.Get<DataProviderPart>();
+                if (source != null) source.Source = "TestSDT \n{\n    ItemId = 1\n    ItemName = 'Test'\n}"; */
+                
+                var rules = dpr.Parts.Get<RulesPart>();
+                if (rules == null) {
+                    rules = new RulesPart(dpr);
+                    dpr.Parts.Add(rules.Type, rules);
+                }
+                rules.Source = "// DataProvider Rules";
+            }
+
+            dpr.Save();
+            Logger.Info($"[ForgeService] DataProvider '{name}' handled (Created: {created}).");
+        }
+
+        private void CreateSDTNative(string name)
+        {
+            var kb = _objectService.GetKB();
+            KBModel model = kb.DesignModel;
+
+            SDT sdt = SDT.Get(model, new QualifiedName(name));
+            if (sdt == null)
+            {
+                sdt = new SDT(model);
+                sdt.Name = name;
+                sdt.Description = name;
+                sdt.Save();
+                Logger.Info($"[ForgeService] SDT '{name}' created.");
             }
             else
             {
-                Logger.Info($"[ForgeService] Procedure '{name}' already exists.");
+                Logger.Info($"[ForgeService] SDT '{name}' already exists.");
             }
         }
 

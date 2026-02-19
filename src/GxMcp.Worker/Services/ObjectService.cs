@@ -12,6 +12,7 @@ using Artech.Architecture.Common;
 using Artech.Architecture.UI.Framework.Services;
 using Artech.Udm.Framework;
 using Newtonsoft.Json.Linq;
+using System.Xml;
 using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
@@ -25,6 +26,16 @@ namespace GxMcp.Worker.Services
         private static readonly Dictionary<string, string> _cache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly List<string> _lru = new List<string>();
         private const int MAX_CACHE_SIZE = 50;
+
+        // GeneXus Part GUIDs
+        private static readonly Dictionary<string, Guid> _partGuids = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Source", new Guid("528d1c06-a9c2-420d-bd35-21dca83f12ff") }, // Procedure Source
+            { "Rules", new Guid("c414ed00-8cc4-4f44-8820-4baf93547173") },  // Rules
+            { "Events", new Guid("e4c4ade7-53f0-4a56-bdfd-843735b66f47") }, // Events
+            { "Conditions", new Guid("ad3ca970-19d0-44e1-a7b7-db05556e820c") }, // Conditions
+            { "Variables", new Guid("9b0a32a3-de6d-4be1-a4dd-1b85d3741534") } // Variables
+        };
 
         public ObjectService(BuildService buildService, KbService kbService)
         {
@@ -299,6 +310,117 @@ namespace GxMcp.Worker.Services
             {
                 Console.Error.WriteLine($"[ObjectService Read Error] {ex.Message}");
                 return "{\"error\":\"SDK Read Error: " + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
+
+        private string GetPartSourceText(string target, string partName)
+        {
+            var obj = FindObject(target);
+            if (obj == null) return null;
+
+            foreach (var p in obj.Parts)
+            {
+                string pName = "";
+                string pTypeGuid = "";
+
+                try
+                {
+                    var typeProp = p.GetType().GetProperty("Type");
+                    var partType = typeProp?.GetValue(p, null);
+                    pTypeGuid = GetGuid(partType);
+                    
+                    var ptNameProp = partType?.GetType().GetProperty("Name");
+                    pName = ptNameProp?.GetValue(partType, null) as string ?? "";
+
+                    bool isMatch = false;
+                    if (string.Equals(pName, partName, StringComparison.OrdinalIgnoreCase)) isMatch = true;
+
+                    if (!isMatch && _partGuids.TryGetValue(partName, out Guid expectedGuid))
+                    {
+                        if (string.Equals(pTypeGuid, expectedGuid.ToString(), StringComparison.OrdinalIgnoreCase)) isMatch = true;
+                    }
+
+                    if (!isMatch && (partName.Equals("Documentation", StringComparison.OrdinalIgnoreCase) || partName.Equals("Doc", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (pTypeGuid.Equals("babf62c5-0111-49e9-a1c3-cc004d90900a", StringComparison.OrdinalIgnoreCase)) isMatch = true;
+                    }
+
+                    if (isMatch)
+                    {
+                        string source = "";
+                        var sourceProp = p.GetType().GetProperty("Source");
+                        var docProp = p.GetType().GetProperty("Documentation");
+                        var contentProp = p.GetType().GetProperty("Content");
+                        var editableContentProp = p.GetType().GetProperty("EditableContent");
+                        var textProp = p.GetType().GetProperty("Text");
+                        var templateProp = p.GetType().GetProperty("Template");
+                        var elementProp = p.GetType().GetProperty("Element");
+                        var pageProp = p.GetType().GetProperty("Page");
+
+                        if (sourceProp != null) source = sourceProp.GetValue(p, null) as string ?? "";
+                        if (string.IsNullOrEmpty(source) && docProp != null) source = docProp.GetValue(p, null) as string ?? "";
+                        if (string.IsNullOrEmpty(source) && contentProp != null) source = contentProp.GetValue(p, null) as string ?? "";
+                        if (string.IsNullOrEmpty(source) && editableContentProp != null) source = editableContentProp.GetValue(p, null) as string ?? "";
+                        if (string.IsNullOrEmpty(source) && textProp != null) source = textProp.GetValue(p, null) as string ?? "";
+                        if (string.IsNullOrEmpty(source) && templateProp != null) source = templateProp.GetValue(p, null) as string ?? "";
+
+                        if (string.IsNullOrEmpty(source) && pageProp != null)
+                        {
+                            var page = pageProp.GetValue(p, null);
+                            if (page != null)
+                            {
+                                var pageContentProp = page.GetType().GetProperty("Content") ?? page.GetType().GetProperty("EditableContent") ?? page.GetType().GetProperty("Source");
+                                source = pageContentProp?.GetValue(page, null) as string ?? "";
+                            }
+                        }
+
+                        if (string.IsNullOrEmpty(source) && elementProp != null)
+                        {
+                            var element = elementProp.GetValue(p, null);
+                            var innerProp = element?.GetType().GetProperty("InnerXml");
+                            source = innerProp?.GetValue(element, null) as string ?? "";
+                        }
+                        return source;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ObjectService] Error reading part {pName}: {ex.Message}");
+                }
+            }
+            return null;
+        }
+
+        public string ReadObjectSource(string target, string partName)
+        {
+            try
+            {
+                string source = GetPartSourceText(target, partName);
+                if (source == null) return "{\"error\":\"Object or Part not found\"}";
+                return "{\"name\":\"" + target + "\", \"part\":\"" + partName + "\", \"source\":\"" + CommandDispatcher.EscapeJsonString(source) + "\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
+
+        public string ReadObjectSection(string target, string partName, string sectionName)
+        {
+            try
+            {
+                string partCode = GetPartSourceText(target, partName);
+                if (partCode == null) return "{\"error\":\"Object or Part not found\"}";
+
+                var range = CodeParser.GetSectionRange(partCode, sectionName);
+                if (range.start == -1) return "{\"error\":\"Section not found: " + sectionName + "\"}";
+
+                string sectionContent = partCode.Substring(range.start, range.end - range.start);
+                return "{\"name\":\"" + target + "\", \"part\":\"" + partName + "\", \"section\":\"" + sectionName + "\", \"source\":\"" + CommandDispatcher.EscapeJsonString(sectionContent) + "\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 

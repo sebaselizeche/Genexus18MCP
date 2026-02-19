@@ -524,5 +524,37 @@ namespace GxMcp.Worker.Services
             if (typeGuidProp != null) return typeGuidProp.GetValue(obj, null)?.ToString() ?? "";
             return "";
         }
+        public string WriteObjectSection(string target, string partName, string sectionName, string newContent)
+        {
+            try
+            {
+                Logger.Info($"[WriteService] Surgical write to: {target} (Part: {partName}, Section: {sectionName})");
+
+                // 1. Get current full source
+                // 1. Get current full source safely via ObjectService
+                string jsonResponse = _objectService.ReadObjectSource(target, partName);
+                if (jsonResponse.Contains("\"error\"")) return jsonResponse;
+
+                var jObj = Newtonsoft.Json.Linq.JObject.Parse(jsonResponse);
+                string fullCode = jObj["source"]?.ToString() ?? "";
+
+                // 2. Find section range
+                var range = CodeParser.GetSectionRange(fullCode, sectionName);
+                if (range.start == -1) return "{\"error\": \"Section not found: " + sectionName + "\"}";
+
+                // 3. Replace surgically
+                string head = fullCode.Substring(0, range.start);
+                string tail = fullCode.Substring(range.end);
+                string updatedCode = head + newContent + tail;
+
+                // 4. Use existing WriteObject to save the full updated part
+                return WriteObject(target, partName, updatedCode);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[WriteService Section Error] {ex.Message}");
+                return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
     }
 }

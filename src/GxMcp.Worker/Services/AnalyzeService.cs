@@ -9,7 +9,9 @@ using Artech.Genexus.Common.Parts;
 using Artech.Genexus.Common.Objects;
 using Artech.Architecture.Common.Collections;
 using GxMcp.Worker.Models;
+using GxMcp.Worker.Helpers;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
 {
@@ -32,22 +34,32 @@ namespace GxMcp.Worker.Services
                 var result = AnalyzeInternal(target);
                 if (result == null) return "{\"error\": \"Analysis failed for: " + CommandDispatcher.EscapeJsonString(target) + "\"}";
 
-                // Build JSON response
-                string callsJson = "[" + string.Join(",", result.Calls.Select(c => "\"" + CommandDispatcher.EscapeJsonString(c) + "\"")) + "]";
-                string tablesJson = "[" + string.Join(",", result.Tables.Select(t => "\"" + CommandDispatcher.EscapeJsonString(t) + "\"")) + "]";
-                string tagsJson = "[" + string.Join(",", result.Tags.Select(t => "\"" + t + "\"")) + "]";
-                string rulesJson = "[" + string.Join(",", result.Rules.Select(r => "\"" + CommandDispatcher.EscapeJsonString(r) + "\"")) + "]";
-                string insightsJson = "[" + string.Join(",", result.Insights.Select(i => "{\"level\":\"" + i.Level + "\",\"message\":\"" + CommandDispatcher.EscapeJsonString(i.Message) + "\"}")) + "]";
+                // Build optimized JSON response
+                var jsonParts = new List<string>();
+                jsonParts.Add($"\"name\":\"{CommandDispatcher.EscapeJsonString(target)}\"");
+                
+                if (result.Calls.Count > 0)
+                    jsonParts.Add($"\"calls\":[" + string.Join(",", result.Calls.Select(c => "\"" + CommandDispatcher.EscapeJsonString(c) + "\"")) + "]");
+                
+                if (result.Tables.Count > 0)
+                    jsonParts.Add($"\"tables\":[" + string.Join(",", result.Tables.Select(t => "\"" + CommandDispatcher.EscapeJsonString(t) + "\"")) + "]");
+                
+                if (result.Tags.Count > 0)
+                    jsonParts.Add($"\"tags\":[" + string.Join(",", result.Tags.Select(t => "\"" + t + "\"")) + "]");
+                
+                if (result.Rules.Count > 0)
+                    jsonParts.Add($"\"rules\":[" + string.Join(",", result.Rules.Select(r => "\"" + CommandDispatcher.EscapeJsonString(r) + "\"")) + "]");
+                
+                if (!string.IsNullOrEmpty(result.Domain) && result.Domain != "Geral")
+                    jsonParts.Add($"\"domain\":\"{result.Domain}\"");
 
-                return "{\"name\":\"" + CommandDispatcher.EscapeJsonString(target) + "\","
-                     + "\"calls\":" + callsJson + ","
-                     + "\"tables\":" + tablesJson + ","
-                     + "\"tags\":" + tagsJson + ","
-                     + "\"rules\":" + rulesJson + ","
-                     + "\"domain\":\"" + result.Domain + "\","
-                     + "\"insights\":" + insightsJson + ","
-                     + "\"complexity\":" + result.Complexity + ","
-                     + "\"codeLength\":" + result.CodeLength + "}";
+                if (result.Insights.Count > 0)
+                    jsonParts.Add($"\"insights\":[" + string.Join(",", result.Insights.Select(i => "{\"level\":\"" + i.Level + "\",\"message\":\"" + CommandDispatcher.EscapeJsonString(i.Message) + "\"}")) + "]");
+
+                jsonParts.Add($"\"complexity\":{result.Complexity}");
+                jsonParts.Add($"\"codeLength\":{result.CodeLength}");
+
+                return "{" + string.Join(",", jsonParts) + "}";
             }
             catch (Exception ex)
             {
@@ -55,6 +67,32 @@ namespace GxMcp.Worker.Services
                 return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
+
+        public string ListSections(string target, string partName)
+        {
+            try
+            {
+                // Delegate to ObjectService which now handles GUIDs and safe parsing
+                string jsonResponse = _objectService.ReadObjectSource(target, partName);
+                if (jsonResponse.Contains("\"error\"")) return jsonResponse;
+
+                var jObj = JObject.Parse(jsonResponse);
+                string partCode = jObj["source"]?.ToString() ?? "";
+
+                var sections = CodeParser.GetSections(partCode);
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { 
+                    name = target, 
+                    part = partName, 
+                    sections = sections 
+                });
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
+
+        // Helper methods moved to CodeParser.cs
 
         public AnalysisResult AnalyzeInternal(string target)
         {

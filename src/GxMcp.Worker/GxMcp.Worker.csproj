@@ -18,10 +18,6 @@
       <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Genexus.Common.dll</HintPath>
       <Private>True</Private>
     </Reference>
-    <Reference Include="Artech.Genexus.Common.Serialization">
-      <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Genexus.Common.Serialization.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
     <Reference Include="Artech.Udm.Framework">
       <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Udm.Framework.dll</HintPath>
       <Private>True</Private>

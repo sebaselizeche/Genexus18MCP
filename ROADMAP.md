@@ -88,3 +88,11 @@
   - [ ] Complexity hotspot map (top-N objects by complexity score)
   - [ ] Generate JSON health report for external consumption
   - [ ] Trend tracking: compare index snapshots over time to detect code drift
+- [ ] **Frente 13: Zero-IDE Stability & Surgical Editing (The "Fly-by-Wire" Upgrade)**
+  > Addresses major blockers for fully autonomous development without the GeneXus IDE.
+  - [ ] **Transparent Compiler Feedback**: Capture and return the full GeneXus MSBuild/SDK error log during `WriteObject` operations (instead of generic "Validation failed").
+  - [ ] **Variable Inspection API**: Enhance `genexus_read_source` (part: Variables) to return the full list of defined variables, including their types and lengths (e.g., `ExcelDocument`, `File`, `Numeric(10.2)`).
+  - [ ] **Transaction Hierarchy Mapping**: Implement a tool to visualize the level structure (Pai/Filho) and physical table names of a Transaction to facilitate `New`/`For Each` commands.
+  - [ ] **Deep Code Indexing (RAG)**: Index source code content (Procedures, Events) in `SearchIndex` to allow semantic search of code patterns (e.g., "how to use ReadLine").
+  - [ ] **Granular Procedure Editing**: Enable `genexus_read_section` and `genexus_write_section` for Procedures, allowing surgical updates to specific `Sub ... EndSub` blocks.
+  - [ ] **Attribute Metadata Tool**: Create a fast lookup tool for attribute properties (Type, Length, Domain, Table) to avoid inference errors during code generation.

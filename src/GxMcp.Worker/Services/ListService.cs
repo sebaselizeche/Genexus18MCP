@@ -59,7 +59,7 @@ namespace GxMcp.Worker.Services
 
                         if (matchesFilter)
                         {
-                            objects.Add($"{GetShorthand(entry.Type)}:{entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name}");
+                            objects.Add($"{GetShorthand(entry.Type)}:{(entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name)}");
                         }
                     }
                 }
@@ -129,6 +129,12 @@ namespace GxMcp.Worker.Services
                 case "dataprovider": return "Dpr";
                 case "sdpanel": return "Sdp";
                 case "menu": return "Mnu";
+                case "attribute": return "Att";
+                case "table": return "Tbl";
+                case "domain": return "Dom";
+                case "image": return "Img";
+                case "file": return "File";
+                case "module": return "Mod";
                 default: return typeName.Substring(0, Math.Min(3, typeName.Length));
             }
         }
