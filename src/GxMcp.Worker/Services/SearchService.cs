@@ -22,10 +22,7 @@ namespace GxMcp.Worker.Services
             { "fin", new[] { "financeiro" } },
             { "financeiro", new[] { "fin" } },
             { "acad", new[] { "acadêmico", "academico", "estudante", "aluno" } },
-            { "acadêmico", new[] { "acad" } },
-            { "academico", new[] { "acad" } },
             { "wrf", new[] { "workflow", "fluxo", "etapa" } },
-            { "fluxo", new[] { "wrf" } },
             { "trn", new[] { "transação", "transacao", "transaction" } },
             { "prc", new[] { "procedure", "processo" } },
             { "att", new[] { "atributo", "attribute" } },
@@ -33,23 +30,24 @@ namespace GxMcp.Worker.Services
             { "dom", new[] { "domínio", "dominio" } }
         };
 
-        public string Search(string query)
+        public string Search(string query, string typeFilter = null, string domainFilter = null, int limit = 50)
         {
             try
             {
                 var index = _indexCacheService.GetIndex();
                 if (index == null || index.Objects.Count == 0)
-                    return "{\"error\": \"Search index not found or empty. To use discovery tools, you MUST first run 'genexus_bulk_index' to synchronize KB metadata.\"}";
+                    return "{\"error\": \"Search index not found or empty. Please run 'genexus_bulk_index' first.\"}";
 
-                string[] originalTerms = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 var expandedTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                
-                foreach (var term in originalTerms)
+                if (!string.IsNullOrEmpty(query))
                 {
-                    expandedTerms.Add(term);
-                    if (BusinessSynonyms.TryGetValue(term, out var synonyms))
+                    foreach (var term in query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
                     {
-                        foreach (var syn in synonyms) expandedTerms.Add(syn);
+                        expandedTerms.Add(term);
+                        if (BusinessSynonyms.TryGetValue(term, out var synonyms))
+                        {
+                            foreach (var syn in synonyms) expandedTerms.Add(syn);
+                        }
                     }
                 }
 
@@ -58,33 +56,44 @@ namespace GxMcp.Worker.Services
 
                 foreach (var entry in index.Objects.Values)
                 {
-                    int score = CalculateScore(entry, terms);
-                    if (score > 0)
+                    // Hard Filters
+                    if (!string.IsNullOrEmpty(typeFilter) && !IsTypeMatch(entry.Type, typeFilter)) continue;
+                    if (!string.IsNullOrEmpty(domainFilter) && !string.Equals(entry.BusinessDomain, domainFilter, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    int score = 0;
+                    if (terms.Length > 0)
                     {
-                        results.Add(new RankedResult { Entry = entry, Score = score });
+                        score = CalculateScore(entry, terms);
+                        if (score <= 0) continue;
                     }
+                    else
+                    {
+                        // Listing mode (no query)
+                        score = 1; // All matching filters get same score
+                    }
+
+                    results.Add(new RankedResult { Entry = entry, Score = score });
                 }
 
-                var topResults = results
+                var finalResults = results
                     .OrderByDescending(r => r.Score)
-                    .Take(50)
+                    .ThenBy(r => r.Entry.Name)
+                    .Take(limit)
                     .Select(r => {
                         var dict = new Dictionary<string, object>();
                         dict["name"] = r.Entry.Name;
                         dict["type"] = r.Entry.Type;
-                        dict["score"] = r.Score;
+                        if (r.Score > 1) dict["score"] = r.Score;
+                        if (!string.IsNullOrEmpty(r.Entry.Description)) dict["description"] = r.Entry.Description;
                         if (r.Entry.BusinessDomain != null && r.Entry.BusinessDomain != "Geral") dict["domain"] = r.Entry.BusinessDomain;
-                        if (r.Entry.Rules != null && r.Entry.Rules.Count > 0) dict["rules"] = r.Entry.Rules;
-                        if (r.Entry.Tags != null && r.Entry.Tags.Count > 0) dict["tags"] = r.Entry.Tags;
-                        if (!string.IsNullOrEmpty(r.Entry.SourceSnippet)) dict["snippet"] = CommandDispatcher.EscapeJsonString(r.Entry.SourceSnippet);
-                        dict["connections"] = r.Entry.Calls.Count + r.Entry.CalledBy.Count;
+                        dict["connections"] = (r.Entry.Calls?.Count ?? 0) + (r.Entry.CalledBy?.Count ?? 0);
                         return dict;
                     })
                     .ToList();
 
                 return Newtonsoft.Json.JsonConvert.SerializeObject(new { 
-                    count = topResults.Count, 
-                    results = topResults 
+                    count = finalResults.Count, 
+                    results = finalResults 
                 });
             }
             catch (Exception ex)
@@ -96,68 +105,47 @@ namespace GxMcp.Worker.Services
         private int CalculateScore(SearchIndex.IndexEntry entry, string[] terms)
         {
             int score = 0;
-            string content = $"{entry.Name} {entry.Description} {entry.BusinessDomain} {string.Join(" ", entry.Tags)} {string.Join(" ", entry.Keywords)} {string.Join(" ", entry.Rules)} {entry.SourceSnippet}";
+            string content = $"{entry.Name} {entry.Description} {entry.BusinessDomain} {string.Join(" ", entry.Tags ?? new List<string>())}";
             
-            // Normalize name (remove types if present in comparison)
-            string pureName = entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name;
-
             foreach (var term in terms)
             {
-                // Exact name match (Highest priority)
-                if (pureName.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 200;
+                // Exact name match
+                if (entry.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 500;
                 
                 // Prefix match
-                if (pureName.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 100;
+                if (entry.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 200;
 
-                // Substring match in name
-                if (pureName.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 50;
+                // Substring name
+                if (entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
 
                 // Type match boost
                 if (IsTypeMatch(entry.Type, term)) score += 150;
 
-                // Domain match
-                if (entry.BusinessDomain != null && entry.BusinessDomain.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 50;
+                // Domain boost
+                if (entry.BusinessDomain != null && entry.BusinessDomain.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 50;
 
-                // Tag match
-                if (entry.Tags.Any(tag => tag.Equals(term, StringComparison.OrdinalIgnoreCase))) score += 40;
-
-                // Rule match
-                if (entry.Rules.Any(r => r.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0)) score += 35;
-
-                // Keyword match (from name segments)
-                if (entry.Keywords != null && entry.Keywords.Any(k => k.Equals(term, StringComparison.OrdinalIgnoreCase))) score += 30;
-
-                // Source code match
-                if (!string.IsNullOrEmpty(entry.SourceSnippet) && entry.SourceSnippet.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 15;
-
-                // Keyword/Description match (content search)
-                if (content.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 5;
+                // Content match
+                if (content.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 10;
             }
 
-            // Graph Ranking: Objects with more connections are more relevant
-            if (score > 0)
-            {
-                score += (entry.Calls.Count * 2);      // Hubiness
-                score += (entry.CalledBy.Count * 10);  // Authority (weighted more heavily now)
-            }
+            // Connection weight
+            score += (entry.CalledBy?.Count ?? 0) * 5;
 
             return score;
         }
 
-        private bool IsTypeMatch(string type, string term)
+        private bool IsTypeMatch(string type, string query)
         {
             string t = type.ToLower();
-            string q = term.ToLower();
+            string q = query.ToLower();
 
-            if (q == "prc" || q == "proc" || q == "procedure") return t == "procedure" || t == "prc";
-            if (q == "trn" || q == "transaction") return t == "transaction" || t == "trn";
-            if (q == "wp" || q == "wbp" || q == "webpanel") return t == "webpanel" || t == "wbp";
-            if (q == "att" || q == "attribute") return t == "attribute" || t == "att";
-            if (q == "tbl" || q == "table") return t == "table" || t == "tbl";
-            if (q == "dom" || q == "domain") return t == "domain" || t == "dom";
-            if (q == "pnl" || q == "panel") return t == "webpanel" || t == "sdpanel" || t == "wbp" || t == "sdp";
-
-            return false;
+            if (q == "prc" || q == "proc" || q == "procedure") return t.Contains("procedure") || t == "prc";
+            if (q == "trn" || q == "transaction") return t.Contains("transaction") || t == "trn";
+            if (q == "wp" || q == "wbp" || q == "webpanel") return t.Contains("webpanel") || t == "wbp";
+            if (q == "att" || q == "attribute") return t.Contains("attribute") || t == "att";
+            if (q == "tbl" || q == "table") return t.Contains("table") || t == "tbl";
+            
+            return t.Contains(q) || q.Contains(t);
         }
 
         private class RankedResult

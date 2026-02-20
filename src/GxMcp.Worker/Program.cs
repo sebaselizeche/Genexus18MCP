@@ -1,129 +1,128 @@
-﻿using System;
+using System;
 using System.IO;
-// using Newtonsoft.Json; // Native .NET 4.8 doesn't have System.Text.Json, will need Newtonsoft or simple string parsing for now to minimize dependencies if we want ultra-light.
-// Actually we have a reference to Artech.Genexus.Common, which might use Newtonsoft. 
-// But let's stick to simple Console reading for the loop.
+using System.Threading;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using GxMcp.Worker.Services;
+using GxMcp.Worker.Helpers;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Reflection;
 
 namespace GxMcp.Worker
 {
     class Program
     {
+        private static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>();
+        private static CommandDispatcher _dispatcher;
+
+        [STAThread]
         static void Main(string[] args)
         {
-            AppDomain.CurrentDomain.AssemblyResolve += CurrentDomain_AssemblyResolve;
-
-            // Redirect Console.Error to a file for better debugging
-            // Redirect Console.Error to a file for better debugging
-            string cacheDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache");
-            if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
-            
-            var logPath = Path.Combine(cacheDir, "analysis_trace.log");
             try {
-                var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                var logWriter = new StreamWriter(stream) { AutoFlush = true };
-                Console.SetError(logWriter);
-            } catch { }
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+                    Logger.Error("FATAL: " + (e.ExceptionObject as Exception)?.Message);
+                };
 
-            // 1. Initialize SDK
-            string gxPath = @"C:\Program Files (x86)\GeneXus\GeneXus18";
-            string currentDir = Directory.GetCurrentDirectory();
-            try
-            {
-                Directory.SetCurrentDirectory(gxPath);
-                Console.Error.WriteLine("[Worker] Initializing GeneXus SDK...");
-                Console.Error.Flush();
+                Console.WriteLine("WORKER_HANDSHAKE_START");
+                Logger.Info("Worker process started (STA Mode).");
+
+                string gxPath = Environment.GetEnvironmentVariable("GX_PROGRAM_DIR") ?? @"C:\Program Files (x86)\GeneXus\GeneXus18";
                 
-                // 1. Disable UI
-                var uiServicesType = System.Reflection.Assembly.Load("Artech.Architecture.UI.Framework")
-                    .GetType("Artech.Architecture.UI.Framework.Services.UIServices");
-                uiServicesType?.GetMethod("SetDisableUI", new Type[] { typeof(bool) })?.Invoke(null, new object[] { true });
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) => {
+                    try {
+                        string assemblyName = new AssemblyName(resolveArgs.Name).Name + ".dll";
+                        string assemblyPath = Path.Combine(gxPath, assemblyName);
+                        if (File.Exists(assemblyPath)) return Assembly.LoadFrom(assemblyPath);
+                    } catch { }
+                    return null;
+                };
 
-                // 2. Connector.Initialize(true)
-                var connectorType = System.Reflection.Assembly.Load("Connector").GetType("Artech.Core.Connector");
-                var initMethod = connectorType.GetMethod("Initialize", new Type[] { typeof(bool) });
-                if (initMethod != null) {
-                    initMethod.Invoke(null, new object[] { true });
-                } else {
-                    connectorType.GetMethod("Initialize", new Type[] { })?.Invoke(null, null);
-                }
-                
-                // 3. Start Business Logic
-                connectorType.GetMethod("StartBL", new Type[] { })?.Invoke(null, null);
-                
-                Console.Error.WriteLine("[Worker] SDK Initialized successfully.");
-                Console.Error.Flush();
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[Worker Critical Error] SDK Init Failed: {ex.Message}");
-                if (ex.InnerException != null) Console.Error.WriteLine($"[Worker Critical Error] Inner: {ex.InnerException.Message}");
-            }
-            finally
-            {
-                Directory.SetCurrentDirectory(currentDir);
-            }
-            
-            // Note: StartBL might still be needed if ArtechServices.Initialize isn't enough.
-            // But let's see if this one hangs.
+                InitializeSdk(gxPath);
+                _dispatcher = CommandDispatcher.Instance;
+                Logger.Info("Worker SDK ready.");
 
-            // 2. Initialize Services
-            var dispatcher = Services.CommandDispatcher.Instance;
-            dispatcher.PreWarm();
-            
-            Console.Error.WriteLine("[Worker] Started. Waiting for commands...");
+                var readerThread = new Thread(() => {
+                    using (var reader = new StreamReader(Console.OpenStandardInput())) {
+                        while (true) {
+                            string line = reader.ReadLine();
+                            if (line == null) break;
+                            if (!string.IsNullOrWhiteSpace(line)) CommandQueue.Add(line);
+                        }
+                    }
+                    CommandQueue.CompleteAdding();
+                }) { IsBackground = true };
+                readerThread.Start();
 
-            string line;
-            while ((line = Console.ReadLine()) != null)
-            {
-                try 
+                foreach (string line in CommandQueue.GetConsumingEnumerable())
                 {
-                    // Console.Error.WriteLine($"[Worker] Received: {line}"); // Debug only, too noisy
-                    
-                    // Dispatch
-                    string result = dispatcher.Dispatch(line);
-                    string id = dispatcher.GetId(line);
-                    
-                    // Respond
-                    string idJson = id == null ? "null" : $"\"{id}\"";
-                    string response = "{\"jsonrpc\": \"2.0\", \"result\": " + result + ", \"id\": " + idJson + "}";
-                    Console.WriteLine(response);
-                    Console.Out.Flush();
+                    ProcessCommand(line);
                 }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[Worker Loop Error] {ex.Message}");
-                }
+            } catch (Exception ex) {
+                Logger.Error($"Main FATAL: {ex.Message}");
             }
         }
 
-        private static System.Reflection.Assembly CurrentDomain_AssemblyResolve(object sender, ResolveEventArgs args)
+        private static void InitializeSdk(string gxPath)
         {
-            string shortName = new System.Reflection.AssemblyName(args.Name).Name;
-            if (shortName.EndsWith(".resources")) return null;
-            
-            string name = shortName + ".dll";
-            string gx = @"C:\Program Files (x86)\GeneXus\GeneXus18";
-            var paths = new System.Collections.Generic.List<string> { 
-                gx, 
-                System.IO.Path.Combine(gx, "Packages"), 
-                System.IO.Path.Combine(gx, "Packages", "Patterns"),
-                AppDomain.CurrentDomain.BaseDirectory 
-            };
-            
-            foreach (var p in paths) {
-                string f = System.IO.Path.Combine(p, name);
-                if (System.IO.File.Exists(f)) {
-                    try { 
-                        var asm = System.Reflection.Assembly.LoadFrom(f);
-                        Console.Error.WriteLine($"[AssemblyResolve] Loaded: {name} from {p}");
-                        return asm; 
-                    } catch (Exception ex) { 
-                        Console.Error.WriteLine($"[AssemblyResolve] Failed to load {name} from {p}: {ex.Message}");
-                    }
+            try {
+                Directory.SetCurrentDirectory(gxPath);
+                
+                var connAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Connector.dll"));
+                var connType = connAsm.GetType("Artech.Core.Connector");
+                connType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
+                connType.GetMethod("Start", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
+
+                var uiAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.UI.Framework.dll"));
+                var uiType = uiAsm.GetType("Artech.Architecture.UI.Framework.Services.UIServices");
+                uiType.GetMethod("SetDisableUI", BindingFlags.Public | BindingFlags.Static).Invoke(null, new object[] { true });
+                uiType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
+
+                var commonAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Genexus.Common.dll"));
+                var initType = commonAsm.GetType("Artech.Genexus.Common.KBModelObjectsInitializer");
+                initType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
+
+                var kbType = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.Common.dll")).GetType("Artech.Architecture.Common.Objects.KnowledgeBase");
+                var kbFactoryProp = kbType.GetProperty("KBFactory", BindingFlags.Public | BindingFlags.Static);
+                kbFactoryProp.SetValue(null, Activator.CreateInstance(connAsm.GetType("Connector.KBFactory")));
+                
+                Logger.Info("Surgical Init Success.");
+            } catch (Exception ex) { Logger.Error("Init Error: " + ex.Message); }
+        }
+
+        private static void ProcessCommand(string line)
+        {
+            try {
+                var obj = JObject.Parse(line);
+                string idJson = obj["id"]?.ToString() ?? "null";
+
+                string result = _dispatcher.Dispatch(line);
+                SendResponse(result, idJson);
+            } catch (Exception ex) { Logger.Error("ProcessCommand Error: " + ex.Message); }
+        }
+
+        private static void SendResponse(string result, string id)
+        {
+            try {
+                // CRITICAL: Ensure result is treated as a raw JToken if it's already JSON
+                // to avoid double escaping, then serialize to ONE LINE.
+                object resultObj;
+                try { resultObj = JToken.Parse(result); }
+                catch { resultObj = result; }
+
+                var response = new {
+                    jsonrpc = "2.0",
+                    result = resultObj,
+                    id = id
+                };
+
+                string json = JsonConvert.SerializeObject(response, Formatting.None);
+                
+                lock (Console.Out) { 
+                    Console.WriteLine(json); 
+                    Console.Out.Flush(); 
                 }
-            }
-            // Console.Error.WriteLine($"[AssemblyResolve] Not found: {name}");
-            return null;
+            } catch (Exception ex) { Logger.Error("SendResponse Error: " + ex.Message); }
         }
     }
 }

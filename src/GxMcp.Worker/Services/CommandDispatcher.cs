@@ -1,192 +1,155 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
 {
     public class CommandDispatcher
     {
-        private readonly BuildService _buildService;
+        private static CommandDispatcher _instance;
+        private static readonly object _lock = new object();
+
         private readonly KbService _kbService;
         private readonly ObjectService _objectService;
         private readonly WriteService _writeService;
         private readonly ListService _listService;
         private readonly AnalyzeService _analyzeService;
-        private readonly ForgeService _forgeService;
+        private readonly BuildService _buildService;
         private readonly RefactorService _refactorService;
-        private readonly DoctorService _doctorService;
-        private readonly SearchService _searchService;
-        private readonly HistoryService _historyService;
-        private readonly WikiService _wikiService;
         private readonly BatchService _batchService;
-        private readonly VisualizerService _visualizerService;
+        private readonly ForgeService _forgeService;
         private readonly IndexCacheService _indexCacheService;
+        private readonly SearchService _searchService;
+        private readonly WikiService _wikiService;
+        private readonly HistoryService _historyService;
+        private readonly VisualizerService _visualizerService;
 
-        private static CommandDispatcher _instance;
-        public static CommandDispatcher Instance => _instance ?? (_instance = new CommandDispatcher());
-
-        public CommandDispatcher()
+        private CommandDispatcher()
         {
-            Console.Error.WriteLine("[Worker] Initializing persistent services...");
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-
-            _buildService = new BuildService();
             _indexCacheService = new IndexCacheService();
+            _buildService = new BuildService();
             _kbService = new KbService(_buildService, _indexCacheService);
-            _buildService.SetKbService(_kbService); // Circular dependency handled via setter
-            _objectService = new ObjectService(_buildService, _kbService);
-            _analyzeService = new AnalyzeService(_objectService, _indexCacheService);
-            _writeService = new WriteService(_objectService, _buildService, _kbService, _analyzeService);
-            _listService = new ListService(_buildService, _kbService, _indexCacheService);
-            _forgeService = new ForgeService(_buildService, _objectService, _analyzeService);
-            _refactorService = new RefactorService(_objectService, _buildService);
-            _doctorService = new DoctorService();
+            _objectService = new ObjectService(_kbService);
+            _writeService = new WriteService(_objectService);
+            _listService = new ListService(_kbService);
+            _analyzeService = new AnalyzeService(_kbService, _objectService);
+            _refactorService = new RefactorService(_kbService);
+            _batchService = new BatchService(_kbService, _writeService);
+            _forgeService = new ForgeService(_kbService, _writeService);
             _searchService = new SearchService(_indexCacheService);
-            _historyService = new HistoryService(_objectService, _writeService);
             _wikiService = new WikiService(_objectService);
-            _batchService = new BatchService(_objectService, _buildService, _analyzeService);
+            _historyService = new HistoryService(_objectService, _writeService);
             _visualizerService = new VisualizerService();
-
-            sw.Stop();
-            Console.Error.WriteLine($"[Worker] Services initialized in {sw.ElapsedMilliseconds}ms");
         }
 
-        public void PreWarm()
+        public static CommandDispatcher Instance
         {
-            try {
-                Console.Error.WriteLine("[Worker] Pre-warming KB connection...");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                _kbService.GetKB();
-                sw.Stop();
-                Console.Error.WriteLine($"[Worker] KB pre-warmed in {sw.ElapsedMilliseconds}ms");
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Worker] Pre-warm failed: {ex.Message}");
-            }
+            get { lock (_lock) { return _instance ?? (_instance = new CommandDispatcher()); } }
         }
 
-        public string Dispatch(string jsonRpc)
-        {
-            var totalSw = System.Diagnostics.Stopwatch.StartNew();
-            try 
-            {
-                var request = JObject.Parse(jsonRpc);
-                var prms = request["params"] as JObject;
-                
-                string module = prms?["module"]?.ToString();
-                string action = prms?["action"]?.ToString();
-                string target = prms?["target"]?.ToString();
-                string payload = prms?["payload"]?.ToString();
-                string part = prms?["part"]?.ToString();
-
-                Console.Error.WriteLine($"[Worker] Dispatching: {module} / {action} / {target}");
-
-                string result = "";
-                switch (module?.ToLower())
-                {
-                    case "build":
-                    case "sync":
-                    case "reorg":
-                        result = _buildService.Execute(action ?? module, target);
-                        break;
-
-                    case "read":
-                        if (string.Equals(action, "ExtractSource", StringComparison.OrdinalIgnoreCase)) result = _objectService.ReadObjectSource(target, part);
-                        else if (string.Equals(action, "ReadSection", StringComparison.OrdinalIgnoreCase)) result = _objectService.ReadObjectSection(target, part, payload);
-                        else if (string.Equals(action, "GetVariables", StringComparison.OrdinalIgnoreCase)) result = _objectService.GetVariables(target);
-                        else if (string.Equals(action, "GetAttribute", StringComparison.OrdinalIgnoreCase)) result = _objectService.GetAttributeMetadata(target);
-                        else result = _objectService.ReadObject(target);
-                        break;
-
-                    case "write":
-                        if (string.Equals(action, "WriteSection", StringComparison.OrdinalIgnoreCase)) {
-                            string sectionName = prms?["section"]?.ToString();
-                            result = _writeService.WriteObjectSection(target, part, sectionName, payload);
-                        }
-                        else result = _writeService.WriteObject(target, part ?? action, payload);
-                        break;
-
-                    case "listobjects":
-                        int limit = prms?["limit"]?.ToObject<int>() ?? 100;
-                        int offset = prms?["offset"]?.ToObject<int>() ?? 0;
-                        result = _listService.ListObjects(target, limit, offset);
-                        break;
-
-                    case "analyze":
-                        if (string.Equals(action, "ListSections", StringComparison.OrdinalIgnoreCase)) result = _analyzeService.ListSections(target, part);
-                        else if (string.Equals(action, "GetHierarchy", StringComparison.OrdinalIgnoreCase)) result = _analyzeService.GetTransactionHierarchy(target);
-                        else result = _analyzeService.Analyze(target);
-                        break;
-
-                    case "forge":
-                        result = _forgeService.CreateObject(target, payload);
-                        break;
-
-                    case "refactor":
-                        result = _refactorService.Refactor(target, action);
-                        break;
-
-                    case "doctor":
-                        result = _doctorService.Diagnose(target);
-                        break;
-
-                    case "search":
-                        result = _searchService.Search(target);
-                        break;
-
-                    case "history":
-                        result = _historyService.Execute(target, action);
-                        break;
-
-                    case "wiki":
-                        result = _wikiService.Generate(target);
-                        break;
-
-                    case "batch":
-                        result = _batchService.Execute(target, action, payload);
-                        break;
-
-                    case "visualize":
-                        result = _visualizerService.GenerateGraph(payload);
-                        break;
-
-                    case "genexus":
-                        if (action == "Test") result = "{\"status\":\"Echo OK\"}";
-                        else if (action == "BulkIndex") result = _kbService.BulkIndex();
-                        else if (action == "IndexPrefix") result = _kbService.IndexPrefix(target);
-                        break;
-                    
-                    default:
-                        result = "{\"error\":\"Unknown module: " + module + "\"}";
-                        break;
-                }
-
-                totalSw.Stop();
-                Console.Error.WriteLine($"[Worker] Command {module}/{action} completed in {totalSw.ElapsedMilliseconds}ms");
-                return result;
-            }
-            catch (Exception ex)
-            {
-                totalSw.Stop();
-                Console.Error.WriteLine($"[Worker Dispatch Error] {ex.Message} (after {totalSw.ElapsedMilliseconds}ms)");
-                return "{\"error\":\"" + EscapeJsonString(ex.Message) + "\"}";
-            }
-        }
-
-        public string GetId(string json)
+        public string Dispatch(string line)
         {
             try
             {
-                var obj = JObject.Parse(json);
-                return obj["id"]?.ToString();
+                Logger.Debug($"Dispatching command: {line.Substring(0, Math.Min(line.Length, 100))}");
+                var request = JObject.Parse(line);
+                string method = request["method"]?.ToString();
+                var @params = request["params"] as JObject ?? new JObject();
+
+                switch (method)
+                {
+                    case "genexus_list_objects":
+                        // Unified with Search: use filter as type filter if no query is given
+                        return _searchService.Search(null, @params["filter"]?.ToString(), null, (int)(@params["limit"] ?? 100));
+                    
+                    case "genexus_search":
+                        return _searchService.Search(@params["query"]?.ToString(), null, null, 50);
+
+                    case "genexus_read_object":
+                        return _objectService.ReadObject(@params["name"]?.ToString());
+                    case "genexus_read_source":
+                        return _objectService.ReadObjectSource(@params["name"]?.ToString(), @params["part"]?.ToString() ?? "Source");
+                    case "genexus_write_object":
+                        return _writeService.WriteObject(@params["name"]?.ToString(), @params["part"]?.ToString(), @params["code"]?.ToString());
+                    case "genexus_analyze":
+                        return _analyzeService.Analyze(@params["name"]?.ToString());
+                    case "genexus_build":
+                        return _buildService.Build(@params["action"]?.ToString(), @params["target"]?.ToString());
+                    case "genexus_doctor":
+                        return _buildService.Doctor(@params["logPath"]?.ToString());
+                    case "genexus_batch":
+                        return _batchService.ProcessBatch(@params["action"]?.ToString(), @params["name"]?.ToString(), @params["code"]?.ToString());
+                    case "genexus_refactor":
+                        return _refactorService.Refactor(@params["name"]?.ToString(), @params["action"]?.ToString());
+                    case "genexus_bulk_index":
+                        return _kbService.BulkIndex();
+                    case "genexus_get_attribute":
+                        return _analyzeService.GetAttributeMetadata(@params["name"]?.ToString());
+                    case "genexus_get_hierarchy":
+                        return _analyzeService.GetHierarchy(@params["name"]?.ToString());
+                    case "genexus_get_variables":
+                        return _analyzeService.GetVariables(@params["name"]?.ToString());
+                    case "genexus_wiki":
+                        return _wikiService.Generate(@params["name"]?.ToString());
+                    case "genexus_visualize":
+                        return _visualizerService.GenerateGraph(@params["domain"]?.ToString());
+                    case "genexus_history":
+                        return _historyService.Execute(@params["name"]?.ToString(), @params["action"]?.ToString());
+                }
+
+                if (method == "execute_command")
+                {
+                    string module = @params["module"]?.ToString();
+                    string action = @params["action"]?.ToString();
+                    string target = @params["target"]?.ToString();
+                    string payload = @params["payload"]?.ToString();
+
+                    switch (module)
+                    {
+                        case "KB":
+                            if (action == "BulkIndex") return _kbService.BulkIndex();
+                            return "{\"error\": \"Action not found in KB\"}";
+                        case "ListObjects":
+                            return _searchService.Search(null, target, null, (int)(@params["limit"] ?? 100));
+                        case "Search":
+                            return _searchService.Search(target);
+                        case "Read":
+                            if (action == "ExtractSource") return _objectService.ReadObjectSource(target, @params["part"]?.ToString() ?? "Source");
+                            if (action == "GetAttribute") return _analyzeService.GetAttributeMetadata(target);
+                            if (action == "GetVariables") return _analyzeService.GetVariables(target);
+                            return _objectService.ReadObject(target);
+                        case "Write":
+                            if (action == "WriteSection") return _writeService.WriteSection(target, @params["part"]?.ToString(), @params["section"]?.ToString(), payload);
+                            return _writeService.WriteObject(target, action, payload);
+                        case "Analyze":
+                            if (action == "ListSections") return _analyzeService.ListSections(target, @params["part"]?.ToString());
+                            if (action == "GetHierarchy") return _analyzeService.GetHierarchy(target);
+                            return _analyzeService.Analyze(target);
+                        case "Build": return _buildService.Build(action, target);
+                        case "Doctor": return _buildService.Doctor(target);
+                        case "Batch": return _batchService.ProcessBatch(action, target, payload);
+                        case "Forge": return _forgeService.CreateObject(target, payload);
+                        case "Refactor": return _refactorService.Refactor(target, action);
+                        case "Wiki": return _wikiService.Generate(target);
+                        case "History": return _historyService.Execute(target, action);
+                        case "Visualizer": return _visualizerService.GenerateGraph(target);
+                    }
+                }
+
+                return "{\"error\": \"Method not found: " + EscapeJsonString(method) + "\"}";
             }
-            catch
+            catch (Exception ex)
             {
-                return null;
+                return "{\"error\": \"" + EscapeJsonString(ex.Message + " (Stack: " + ex.StackTrace?.Replace("\r", "").Replace("\n", " -> ") + ")") + "\"}";
             }
         }
 
         public static string EscapeJsonString(string s)
         {
-            if (s == null) return "";
+            if (string.IsNullOrEmpty(s)) return "";
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
         }
     }

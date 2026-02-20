@@ -1,16 +1,17 @@
 using System;
 using System.IO;
-using System.Linq;
-using System.Collections;
 using System.Collections.Generic;
-using Artech.Architecture.Common.Objects;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Models;
+using System.Reflection;
+using System.Linq;
 
 namespace GxMcp.Worker.Services
 {
     public class KbService
     {
-        private static KnowledgeBase _kb;
+        private static global::Artech.Architecture.Common.Objects.KnowledgeBase _kb;
+        private static readonly object _kbLock = new object();
         private readonly BuildService _buildService;
         private readonly IndexCacheService _indexCacheService;
 
@@ -20,118 +21,78 @@ namespace GxMcp.Worker.Services
             _indexCacheService = indexCacheService;
         }
 
-        public KnowledgeBase GetKB() { EnsureKbOpen(); return _kb; }
-
-        public void Reload()
-        {
-            if (_kb != null) { try { _kb.Close(); } catch { } _kb = null; GC.Collect(); }
-            EnsureKbOpen();
+        public global::Artech.Architecture.Common.Objects.KnowledgeBase GetKB() 
+        { 
+            if (_kb != null) return _kb;
+            EnsureKbOpen(); 
+            return _kb; 
         }
 
         private void EnsureKbOpen()
         {
             if (_kb != null) return;
-            string gxPath = @"C:\Program Files (x86)\GeneXus\GeneXus18";
-            
-            try {
-                string kbPath = _buildService.GetKBPath();
-                if (string.IsNullOrEmpty(kbPath)) throw new Exception("KBPath not configured in config.json");
-
-                Logger.Info($"[KbService] Opening KB: {kbPath}");
-                string oldDir = Directory.GetCurrentDirectory();
-                try {
-                    Directory.SetCurrentDirectory(gxPath);
-                    _kb = KnowledgeBase.Open(new KnowledgeBase.OpenOptions(kbPath));
-                } finally { Directory.SetCurrentDirectory(oldDir); }
-
-                if (_kb == null) throw new Exception("KnowledgeBase.Open returned null.");
-                Logger.Info("[KbService] KB Opened Successfully.");
-            } catch (Exception ex) { 
-                Logger.Error($"[KbService] SDK Error: {ex.Message}"); 
-                throw new Exception($"Failed to connect to GeneXus KB: {ex.Message}");
-            }
-        }
-
-        public string IndexPrefix(string prefix)
-        {
-            try
+            lock (_kbLock)
             {
-                var kb = GetKB();
-                var index = _indexCacheService.GetIndex() ?? new Models.SearchIndex();
+                if (_kb != null) return;
+                
+                string gxPath = Environment.GetEnvironmentVariable("GX_PROGRAM_DIR") ?? @"C:\Program Files (x86)\GeneXus\GeneXus18";
+                try {
+                    string kbPath = _buildService.GetKBPath();
+                    if (kbPath.EndsWith(".gxw", StringComparison.OrdinalIgnoreCase)) kbPath = Path.GetDirectoryName(kbPath);
 
-                int count = 0;
-                foreach (KBObject kbo in kb.DesignModel.Objects)
-                {
+                    string oldDir = Directory.GetCurrentDirectory();
                     try {
-                        if (kbo == null || !kbo.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                        string n = kbo.Name;
-                        string t = GetPrefix(kbo);
-                        string k = t + ":" + n;
-                        index.Objects[k] = new Models.SearchIndex.IndexEntry {
-                            Name = k, Type = t, Description = kbo.Description,
-                            Tags = new List<string>{t}, Keywords = new List<string>{t, n},
-                            Calls = new List<string>(), CalledBy = new List<string>(),
-                            BusinessDomain = "Protocolo"
-                        };
-                        count++;
-                    } catch { continue; }
+                        Directory.SetCurrentDirectory(gxPath);
+                        Logger.Info($"Opening KB in OFFLINE mode: {kbPath}");
+
+                        var options = new global::Artech.Architecture.Common.Objects.KnowledgeBase.OpenOptions(kbPath);
+                        options.EnableMultiUser = true;
+                        options.AvoidIndexing = true;
+                        
+                        // GX18 Hardening: Try to disable all background checks
+                        try {
+                            var props = options.GetType().GetProperties();
+                            foreach(var p in props) {
+                                if (p.Name == "NoAutomaticUpdate" || p.Name == "OfflineMode") {
+                                    p.SetValue(options, true);
+                                    Logger.Debug($"Option {p.Name} set to true.");
+                                }
+                            }
+                        } catch { }
+
+                        _kb = global::Artech.Architecture.Common.Objects.KnowledgeBase.Open(options);
+                        if (_kb == null) throw new Exception("KnowledgeBase.Open returned null");
+                        
+                        Logger.Info($"KB opened successfully. DesignModel: {_kb.DesignModel?.Name}");
+                    } finally { Directory.SetCurrentDirectory(oldDir); }
+                } catch (Exception ex) { 
+                    Logger.Error($"ERROR opening KB: {ex.Message}");
+                    _kb = null;
+                    throw;
                 }
-                index.LastUpdated = DateTime.Now;
-                _indexCacheService.UpdateIndex(index);
-                return "{\"status\":\"Success\", \"indexed\":" + count + "}";
-            } catch (Exception ex) { return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
+            }
         }
 
         public string BulkIndex()
         {
-            try {
-                var kb = GetKB();
-                var index = new Models.SearchIndex();
-                var concurrentDict = new System.Collections.Concurrent.ConcurrentDictionary<string, Models.SearchIndex.IndexEntry>(StringComparer.OrdinalIgnoreCase);
-
-                var objects = kb.DesignModel.Objects.Cast<KBObject>().ToList();
-                System.Threading.Tasks.Parallel.ForEach(objects, kbo => {
-                    try {
-                        if (kbo == null) return;
-                        string n = kbo.Name;
-                        string t = GetPrefix(kbo);
-                        string k = t + ":" + n;
-                        
-                        var entry = new Models.SearchIndex.IndexEntry {
-                            Name = k, Type = t, Description = kbo.Description,
-                            Tags = new List<string>{t}, Keywords = new List<string>{t, n},
-                            Calls = new List<string>(), CalledBy = new List<string>()
-                        };
-                        concurrentDict[k] = entry;
-                    } catch { }
-                });
-
-                index.Objects = concurrentDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
-                index.LastUpdated = DateTime.Now;
-                _indexCacheService.UpdateIndex(index);
-                return "{\"status\":\"Success\", \"indexed\":" + index.Objects.Count + "}";
-            } catch (Exception ex) { return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
-        }
-
-        private string GetPrefix(KBObject obj)
-        {
-            if (obj == null) return "Obj";
-            string typeName = obj.TypeDescriptor.Name;
-
-            switch (typeName.ToLower())
+            try
             {
-                case "procedure": return "Prc";
-                case "transaction": return "Trn";
-                case "webpanel": return "Wbp";
-                case "dataview": return "Dvw";
-                case "dataprovider": return "Dpr";
-                case "sdpanel": return "Sdp";
-                case "menu": return "Mnu";
-                case "attribute": return "Att";
-                case "table": return "Tbl";
-                case "domain": return "Dom";
-                default: return typeName.Length > 3 ? typeName.Substring(0, 3) : typeName;
-            }
+                var kb = GetKB();
+                if (kb == null) return "{\"error\":\"KB not open\"}";
+                Logger.Info("Bulk Indexing...");
+                var index = new SearchIndex { LastUpdated = DateTime.Now };
+                var objects = kb.DesignModel.Objects.GetAll();
+                int total = 0;
+                foreach (var obj in objects)
+                {
+                    index.Objects[$"{obj.TypeDescriptor.Name}:{obj.Name}"] = new SearchIndex.IndexEntry {
+                        Name = obj.Name, Type = obj.TypeDescriptor.Name, Description = obj.Description
+                    };
+                    total++;
+                }
+                _indexCacheService.UpdateIndex(index);
+                return "{\"status\":\"Success\", \"totalIndexed\":" + total + "}";
+            } catch (Exception ex) { return "{\"error\":\"" + ex.Message + "\"}"; }
         }
     }
 }

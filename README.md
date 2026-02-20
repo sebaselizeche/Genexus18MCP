@@ -2,49 +2,43 @@
 
 A high-performance **Model Context Protocol (MCP)** server for GeneXus 18, enabling AI agents (like Claude, Cursor, Antigravity) to interact directly with your GeneXus Knowledge Base using the **Native GeneXus SDK**.
 
-## 🌟 Key Features
+---
 
-- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.\* DLLs) for deep analysis and manipulation.
-- **Semantic Intelligence Engine**:
-  - **Graph-Based Search**: Ranking results by authority (most called) and hubiness.
-  - **Business Domain Mapping**: Automated classification of objects (Financeiro, Acadêmico, etc.).
-  - **Proactive Linter**: Real-time detection of anti-patterns (N+1 queries, missing WHERE).
-- **Live Indexing & In-Memory Caching**:
-  - Sub-millisecond search and listing powered by an in-memory index.
-  - Automatic synchronization with disk upon every analysis.
-- **Robust Assembly Resolution**: Automatically loads GeneXus packages and patterns from your installation folder.
-- **Dual Architecture**:
+## [Main] Key Features
+
+- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.* DLLs) for deep analysis and manipulation.
+- **Unified Discovery Engine**:
+  - **Instant Search**: Local index-based search for KBs with 30,000+ objects.
+  - **Direct GUID Access**: Bypasses slow UI lazy-loading, making code reading 100x faster.
+  - **Semantic Ranking**: Results ranked by authority (most called) and relevance.
+- **Bilingual Part Mapping**: Understands part names in both English and Portuguese (Source/Procedimento, Rules/Regras).
+- **Dual Process Stability**:
   - **Gateway (.NET 8)**: Handles MCP protocol and stdio communication.
-  - **Worker (.NET 4.8 x86)**: Performs the actual GeneXus operations using the native SDK.
+  - **Worker (.NET 4.8 x86)**: Runs in **STA Single-Thread Mode** for maximum SDK compatibility.
+  - **Minified JSON Protocol**: Robust single-line communication to prevent pipe deadlocks.
 
-## 🛠️ Installation & Setup
+---
+
+## [Setup] Installation & Setup
 
 ### Prerequisites
-
-- Windows 10/11 or Server.
-- **GeneXus 18** installed (Tested with GeneXus 18 Upgrade 7+).
-- **.NET 8 SDK** (for Gateway).
-- **.NET Framework 4.8 SDK** (for Worker).
+- Windows 10/11.
+- **GeneXus 18** (Tested with Upgrade 7+).
+- **.NET 8 SDK** and **.NET Framework 4.8**.
 
 ### 1. Build the Project
-
 Run the included build script to compile and prepare the `publish/` directory:
-
 ```powershell
 .\build.ps1
 ```
 
-_Binaries will be placed in the `publish/` directory._
-
 ### 2. Configure `config.json`
-
-Edit `publish\config.json` (created after first build):
-
+Edit `publish\config.json`:
 ```json
 {
   "GeneXus": {
     "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
-    "WorkerExecutable": "GxMcp.Worker.exe"
+    "WorkerExecutable": "worker\\GxMcp.Worker.exe"
   },
   "Environment": {
     "KBPath": "C:\\KBs\\YourKnowledgeBase"
@@ -52,44 +46,26 @@ Edit `publish\config.json` (created after first build):
 }
 ```
 
-## 🤖 AI Agent Configuration (Cursor / Claude Desktop)
+---
 
-Add this to your MCP configuration file:
-
-```json
-{
-  "mcpServers": {
-    "genexus": {
-      "command": "C:\\Projetos\\GenexusMCP\\publish\\GxMcp.Gateway.exe",
-      "args": []
-    }
-  }
-}
-```
-
-## 🧰 Available Tools
+## [Tools] Available Tools
 
 Detailed tool definitions are available in `GEMINI.md`.
 
-- **Reader**: `genexus_list_objects`, `genexus_read_object`, `genexus_search`, `genexus_analyze`
-- **Writer**: `genexus_create_object`, `genexus_write_object`, `genexus_refactor`, `genexus_batch`
-- **DevOps**: `genexus_build`, `genexus_doctor`, `genexus_history`, `genexus_wiki`
+- **Discovery**: `genexus_list_objects`, `genexus_search`, `genexus_bulk_index`
+- **Reader**: `genexus_read_source`, `genexus_read_object`, `genexus_analyze`
+- **Writer**: `genexus_write_object`, `genexus_create_object`
+- **DevOps**: `genexus_build`, `genexus_history`, `genexus_visualize`
 
-## 📁 Repository Structure
+---
 
-- `src/`: Source code for Gateway and Worker.
-- `publish/`: Compiled binaries and configuration.
-- `docs/`: In-depth technical insights and research.
-  - [Native SDK Insights](docs/native_sdk_insights.md): The definitive guide to GUIDs, Collisions, and Persistence.
-- `scripts/`: Curated diagnostic and discovery PowerShell tools.
-
-## 🏗️ Architecture
+## [Arch] Architecture
 
 ```mermaid
 graph LR
     A[AI Agent] --MCP Protocol--> B[Gateway .NET 8]
-    B --StdIO IPC--> C[Worker .NET 4.8 x86]
+    B --Single-Line JSON--> C[Worker .NET 4.8 STA]
     C --Native SDK--> D[GeneXus 18 KB]
 ```
 
-For more technical details on how the SDK integration was stabilized, see [docs/native_sdk_insights.md](docs/native_sdk_insights.md).
+For more technical details on how the SDK integration was stabilized, see [docs/sdk_gx18_discovery.md](docs/sdk_gx18_discovery.md).

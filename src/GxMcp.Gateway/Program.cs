@@ -24,7 +24,7 @@ namespace GxMcp.Gateway
         // Debug log path relative to exe directory
         private static readonly string _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mcp_debug.log");
 
-        private static void Log(string msg)
+        public static void Log(string msg)
         {
             try { File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n"); }
             catch { /* logging must never crash the server */ }
@@ -188,6 +188,30 @@ namespace GxMcp.Gateway
                                 
                                 await _worker.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
                                 
+                                // Wait for response with timeout
+                                var timeoutTask = Task.Delay(30000);
+                                var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+
+                                if (completedTask == timeoutTask)
+                                {
+                                    _pendingRequests.TryRemove(idStr, out _);
+                                    var timeoutResponse = new JObject
+                                    {
+                                        ["jsonrpc"] = "2.0",
+                                        ["id"] = idToken?.DeepClone(),
+                                        ["result"] = JToken.FromObject(new 
+                                        {
+                                            content = new[] 
+                                            {
+                                                new { type = "text", text = "{\"error\": \"Timeout waiting for Worker (30s)\"}" }
+                                            },
+                                            isError = true
+                                        })
+                                    };
+                                    _mcpOut.WriteLine(timeoutResponse.ToString(Formatting.None));
+                                    continue;
+                                }
+
                                 string workerResultJson = await tcs.Task;
                                 var workerResultObj = JObject.Parse(workerResultJson);
                                 

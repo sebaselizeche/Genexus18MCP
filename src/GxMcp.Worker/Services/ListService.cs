@@ -1,86 +1,85 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.IO;
-using Artech.Architecture.Common.Objects;
-using Artech.Architecture.Common.Services;
-using Artech.Architecture.Common;
-using Artech.Architecture.UI.Framework.Services;
-using GxMcp.Worker.Helpers;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
 {
     public class ListService
     {
-        private readonly BuildService _buildService;
         private readonly KbService _kbService;
-        private readonly IndexCacheService _indexCacheService;
 
-        public ListService(BuildService buildService, KbService kbService, IndexCacheService indexCacheService)
+        public ListService(KbService kbService)
         {
-            _buildService = buildService;
             _kbService = kbService;
-            _indexCacheService = indexCacheService;
         }
 
-        private KnowledgeBase EnsureKbOpen()
-        {
-            return _kbService.GetKB();
-        }
-
-        public string ListObjects(string filter, int limit = 100, int offset = 0)
+        public string ListObjects(string filter, int limit, int offset)
         {
             try
             {
-                var objects = new List<string>();
-                string[] filters = string.IsNullOrEmpty(filter) ? null : filter.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                var kb = _kbService.GetKB();
+                if (kb == null) return "{\"error\":\"KB not open\"}";
 
-                var index = _indexCacheService.GetIndex();
-                if (index == null || index.Objects.Count == 0)
+                var array = new JArray();
+                int count = 0;
+                int current = 0;
+
+                if (kb.DesignModel == null) return "{\"error\":\"KB DesignModel is null\"}";
+                var objects = kb.DesignModel.Objects;
+                if (objects == null) return "{\"error\":\"KB DesignModel.Objects is null\"}";
+
+                // Parse filter: can be a comma-separated list of types or a partial name
+                var filterTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                string nameFilter = null;
+
+                if (!string.IsNullOrEmpty(filter))
                 {
-                    return "{\"error\": \"Search index not found or empty. To use discovery tools, you MUST first run 'genexus_bulk_index' to synchronize KB metadata.\"}";
+                    if (filter.Contains(","))
+                    {
+                        foreach (var t in filter.Split(',')) filterTypes.Add(t.Trim());
+                    }
+                    else if (IsLikelyType(filter))
+                    {
+                        filterTypes.Add(filter.Trim());
+                    }
+                    else
+                    {
+                        nameFilter = filter.Trim();
+                    }
                 }
 
-                // Use memory cache for fast listing - NO SDK FALLBACK for performance consistency
-                foreach (var entry in index.Objects.Values)
+                foreach (var obj in objects.GetAll())
+                {
+                    // Filter logic
+                    if (filterTypes.Count > 0 && !filterTypes.Contains(obj.TypeDescriptor.Name)) continue;
+                    if (!string.IsNullOrEmpty(nameFilter) && !obj.Name.Contains(nameFilter)) continue;
+                    
+                    if (current >= offset)
+                    {
+                        var item = new JObject();
+                        item["name"] = obj.Name;
+                        item["type"] = obj.TypeDescriptor?.Name ?? "Unknown";
+                        item["description"] = obj.Description;
+                        array.Add(item);
+                        count++;
+                        if (count >= limit) break;
+                    }
+                    current++;
+                }
 
-                int totalCount = objects.Count;
-                var pagedObjects = objects.Distinct().Skip(offset).Take(limit).ToArray();
-                var jsonItems = pagedObjects.Select(o => "\"" + CommandDispatcher.EscapeJsonString(o) + "\"");
-                
-                return "{\"total\": " + totalCount + "," +
-                       "\"count\": " + pagedObjects.Length + "," +
-                       "\"limit\": " + limit + "," +
-                       "\"offset\": " + offset + "," + 
-                       "\"objects\": [" + string.Join(",", jsonItems) + "]}";
+                return array.ToString();
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[ListService Error] {ex.Message}");
-                return "{\"error\": \"SDK Error: " + CommandDispatcher.EscapeJsonString(ex.Message) + ". Check Worker logs for details.\"}";
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
-        private string GetShorthand(string typeName)
+        private bool IsLikelyType(string s)
         {
-            switch (typeName.ToLower())
-            {
-                case "procedure": return "Prc";
-                case "transaction": return "Trn";
-                case "webpanel": return "Wbp";
-                case "dataview": return "Dvw";
-                case "dataprovider": return "Dpr";
-                case "sdpanel": return "Sdp";
-                case "menu": return "Mnu";
-                case "attribute": return "Att";
-                case "table": return "Tbl";
-                case "domain": return "Dom";
-                case "image": return "Img";
-                case "file": return "File";
-                case "module": return "Mod";
-                default: return typeName.Substring(0, Math.Min(3, typeName.Length));
-            }
+            var types = new[] { "Procedure", "Transaction", "WebPanel", "Attribute", "Table", "DataView", "Domain", "WorkPanel", "ExternalObject", "Menu", "SDPanel" };
+            return types.Any(t => string.Equals(t, s, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

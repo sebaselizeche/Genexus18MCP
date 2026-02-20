@@ -49,8 +49,10 @@ namespace GxMcp.Gateway
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                // IMPORTANT: Provide the GeneXus Environment variables if needed, 
-                // but relying on GxMcp.Worker.exe.config and location is better.
+                // Provide the GeneXus Environment variable
+                EnvironmentVariables = {
+                    ["GX_PROGRAM_DIR"] = _config.GeneXus.InstallationPath
+                }
             };
 
             _process = new Process { StartInfo = startInfo };
@@ -64,20 +66,19 @@ namespace GxMcp.Gateway
                         OnRpcResponse?.Invoke(e.Data);
                     }
                     else 
-                    {
-                        Console.Error.WriteLine($"[Worker StdOut] {e.Data}");
-                    }
+                        Program.Log($"[Worker StdOut] {e.Data}");
                 }
             };
             
             _process.ErrorDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                   Console.Error.WriteLine($"[Worker StdErr] {e.Data}");
+                   Program.Log($"[Worker StdErr] {e.Data}");
                 }
             };
 
             _process.Start();
+            _process.StandardInput.AutoFlush = true;
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
         }

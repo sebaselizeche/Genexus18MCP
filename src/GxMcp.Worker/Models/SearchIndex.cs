@@ -27,6 +27,15 @@ namespace GxMcp.Worker.Models
             public string BusinessDomain { get; set; }
             public string ConceptualSummary { get; set; }
             
+            // Attribute specific
+            public string DataType { get; set; }
+            public int Length { get; set; }
+            public int Decimals { get; set; }
+            public bool IsFormula { get; set; }
+
+            // Table/Transaction specific
+            public string RootTable { get; set; }
+            
             public string SourceSnippet { get; set; }
             public string FullSource { get; set; }
             public int Complexity { get; set; }
