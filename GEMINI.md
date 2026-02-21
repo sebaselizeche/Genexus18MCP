@@ -36,9 +36,17 @@ The MCP now automatically handles variables in `genexus_write_object`. You do NO
 
 ### 4. `genexus_analyze` (Linter & Semantic Intelligence)
 - **Features**: Case-insensitive, checks complexity, identifies `COMMIT` in loops, and maps object hierarchy.
+- **Rules**:
+    *   🚫 **Commit in Loop**: Critical performance/locking check (ignores comments).
+    *   ⚠️ **Unfiltered Loop**: Scans for `For Each` without `Where`.
+    *   ℹ️ **Parm Rule**: Warns if a Procedure/WebPanel lacks parameters in `Rules`.
+    *   ℹ️ **New Duplicate**: Suggests `When Duplicate` handling.
 
 ### 5. `genexus_read_source` / `genexus_write_object`
 - **Native**: Direct manipulation of the GeneXus Object Model. Supports Rules, Events, Source, and Variables.
+
+### 6. `genexus_get_data_context`
+- **Deep Insight**: Returns Table structure including **Subtypes**, **Indices**, and **Formulas**. Essential for understanding data relationships.
 
 ---
 
