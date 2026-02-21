@@ -1,4 +1,4 @@
-# Protocolo GeneXus MCP Nirvana (Sentient Edition v18.7)
+# Protocolo GeneXus MCP Nirvana (Elite Edition v19.0)
 
 > [!IMPORTANT]
 > **Skills Required**: Before performing ANY task in this repo, the agent MUST load and follow:
@@ -6,74 +6,51 @@
 > 1. `[GeneXus MCP Mastery](file:///.gemini/skills/genexus-mastery/SKILL.md)` - For tool performance and cache usage.
 > 2. `[GeneXus 18 Guidelines](file:///.gemini/skills/genexus18-guidelines/SKILL.md)` - For official GeneXus development rules.
 
-## 🧠 Intelligence: Smart Variable Injection (v18.7)
-The MCP now automatically handles variables in `genexus_write_object`. You do NOT need to create variables manually for common patterns:
+## 🏎️ Performance: Formula 1 Engine (v19.0)
+The MCP now operates with extreme performance optimizations:
+1.  **Background Flushing**: Cache updates are asynchronous. `patch` and `write` operations are instant.
+2.  **Super Cache**: Object metadata (Types, Lengths, Parm rules) is stored in memory for zero-latency lookups.
+3.  **Smart Read**: Reading source code automatically injects local variable definitions used in that snippet.
 
-1.  **Attribute Inheritance**: If you use `&ClienteId`, the MCP searches for the attribute `ClienteId` and copies its Type, Length, and Decimals.
-2.  **Semantic Heuristics**:
-    *   `Data`, `Dt`, `Emissao` → `Date`
-    *   `Hora`, `Moment`, `Timestamp` → `DateTime`
-    *   `Is...`, `Has...`, `Flg...`, `Ativo` → `Boolean`
-    *   `Valor`, `Preco`, `Total`, `Id`, `Seq` → `Numeric` (Auto-decimals for money)
-3.  **Fallback**: Defaults to `VarChar(100)` if no pattern is matched.
+## 🔍 Intelligence: Unified Search & Impact Analysis
+1.  **Unified Search**: `genexus_list_objects` and `genexus_search` use the same heuristic engine. You can search by Name, Type, or Description.
+2.  **Enriched Results**: Search results now include the **Parm Rule** and a **Code Snippet**, saving multiple "Read" calls.
+3.  **Impact Analysis**: Use `genexus_search(query="usedby:TableName")` to find every object referencing a specific table or attribute.
 
-## [Tools] Tool Usage Guide (Nirvana Optimized)
+## [Tools] Elite Tool Usage Guide
 
-### 1. `genexus_validate` (Pre-save)
-**Purpose**: Surgical syntax check.
-- **Usage**: Call before `write_object` to ensure the logic is sound. Returns SDK diagnostics.
-- **Params**: `name`, `part`, `code`.
+### 1. `genexus_patch` (Surgical Edit) - **PREFER THIS**
+**Purpose**: High-precision editing without transporting full objects.
+- **Usage**: Use `Replace` with exact `context` (old_string) to target lines.
+- **Indentation**: Indentation and whitespace are preserved exactly.
 
-### 2. `genexus_test` (GXtest Integration)
-**Purpose**: Run Unit Tests and get real-time feedback.
-- **Mechanism**: Executes via MSBuild/Abstracta Runner Task.
-- **Output**: Returns "Success" or "Failed" with the full execution log and assertion results.
+### 2. `genexus_read_source` (Paginated)
+**Purpose**: Token-efficient code reading.
+- **Usage**: Use `offset` and `limit` to read specific blocks of large objects.
+- **Metadata**: Automatically returns definitions for `&Variables` found in the snippet.
 
-### 3. `genexus_scaffold` (Object Factory)
-**Purpose**: Create new objects from templates.
-- **Templates**: Supports `Procedure` (Prc) and `Transaction` (Trn).
-- **Usage**: `genexus_scaffold(type='Prc', name='MyNewProc', properties={ 'description': '...', 'code': '...' })`.
+### 3. `genexus_validate` (Pre-save)
+**Purpose**: Native SDK syntax check. Returns real GX18 diagnostics.
 
-### 4. `genexus_analyze` (Linter & Semantic Intelligence)
-- **Features**: Case-insensitive, checks complexity, identifies `COMMIT` in loops, and maps object hierarchy.
-- **Rules**:
-    *   🚫 **Commit in Loop**: Critical performance/locking check (ignores comments).
-    *   ⚠️ **Unfiltered Loop**: Scans for `For Each` without `Where`.
-    *   ℹ️ **Parm Rule**: Warns if a Procedure/WebPanel lacks parameters in `Rules`.
-    *   ℹ️ **New Duplicate**: Suggests `When Duplicate` handling.
-
-### 5. `genexus_read_source` / `genexus_write_object`
-- **Native**: Direct manipulation of the GeneXus Object Model. Supports Rules, Events, Source, and Variables.
-
-### 6. `genexus_get_data_context`
-- **Deep Insight**: Returns Table structure including **Subtypes**, **Indices**, and **Formulas**. Essential for understanding data relationships.
+### 4. `genexus_test` (GXtest Integration)
+**Purpose**: Executes Unit Tests via MSBuild Task and returns real-time assertion results.
 
 ---
 
-## [Workflow] "Nirvana" Zero-IDE Workflow
+## [Workflow] "Nirvana" Elite Workflow
 
 | Step | Action | Tool |
 | :--- | :--- | :--- |
-| **1. Design** | Create new object structure | `genexus_scaffold` |
-| **2. Edit** | Write business logic | `genexus_write_object` |
-| **3. Verify** | Check syntax & logic | `genexus_validate` |
-| **4. Build** | Compile the object | `genexus_build(action='Build', target='...')` |
-| **5. Test** | Run Unit Tests | `genexus_test(name='...')` |
+| **1. Explore** | Find objects and their signatures | `genexus_search` |
+| **2. Impact** | Check what else needs to change | `genexus_search(query="usedby:...")` |
+| **3. Read** | Read specific code blocks | `genexus_read_source(offset, limit)` |
+| **4. Patch** | Apply surgical code changes | `genexus_patch(operation="Replace")` |
+| **5. Verify** | Run native validation & tests | `genexus_validate` -> `genexus_test` |
 
 ---
 
-## [Intel] Intelligence & Best Practices (GX18 Special)
-
-- **One-Line JSON Protocol**: All communication between processes is minified to prevent pipe hangs.
-- **Direct GUID Access**: Accessing parts via GUID bypasses the slow UI lazy-loading.
-- **Prefix Intelligence**: Use prefixes for precision: `Prc:Name`, `Trn:Name`, `Wp:Name`.
-- **Offline Mode**: The motor defaults to offline to prevent hangs waiting for GXserver.
-
-## [Debt] Dívida Técnica & Limitações do MCP (Solved in v18.7)
-
-Durante a evolução do projeto, superamos os principais bloqueadores de autonomia:
-
-1.  **Gestão de Variáveis (Resolvido)**: O sistema agora injeta automaticamente variáveis detectadas no código via `VariableInjector` com inferência de tipo.
-2.  **Dependências de Tabelas (Resolvido)**: O `TableDependencyInjector` força a ancoragem de tabelas necessárias.
-3.  **Feedback de Validação (Resolvido)**: `genexus_validate` permite correções precisas antes do save.
-4.  **Estabilidade do Worker**: Monitorado via Heartbeat e execução em STA thread dedicada.
+## [Debt] Dívida Técnica & Evolução (Resolved in v19.0)
+1.  **I/O Latency**: Fixed via Background Flushing.
+2.  **Search Ambiguity**: Fixed via Unified Heuristic Engine.
+3.  **Token Bloat**: Fixed via Paginated Reading and Enriched Search.
+4.  **SDK Stability**: Fixed via PATH and Working Directory injection in Gateway.
