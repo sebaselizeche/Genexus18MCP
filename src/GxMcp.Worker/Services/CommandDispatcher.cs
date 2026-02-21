@@ -86,7 +86,12 @@ namespace GxMcp.Worker.Services
                     case "genexus_read_object":
                         return _objectService.ReadObject(@params["name"] != null ? @params["name"].ToString() : null);
                     case "genexus_read_source":
-                        return _objectService.ReadObjectSource(@params["name"] != null ? @params["name"].ToString() : null, @params["part"] != null ? @params["part"].ToString() : "Source");
+                        return _objectService.ReadObjectSource(
+                            @params["name"] != null ? @params["name"].ToString() : null, 
+                            @params["part"] != null ? @params["part"].ToString() : "Source",
+                            @params["offset"] != null ? (int?)@params["offset"] : null,
+                            @params["limit"] != null ? (int?)@params["limit"] : null
+                        );
                     case "genexus_write_object":
                         return _writeService.WriteObject(@params["name"] != null ? @params["name"].ToString() : null, @params["part"] != null ? @params["part"].ToString() : null, @params["code"] != null ? @params["code"].ToString() : null);
                     case "genexus_analyze":

@@ -99,11 +99,32 @@ namespace GxMcp.Worker.Services
                         Type = obj.TypeDescriptor.Name,
                         Description = obj.Description
                     };
-                    concurrentDict.TryAdd($"{entry.Type}:{entry.Name}", entry);
+
+                    // ENRICHMENT: Attributes metadata for Smart Injection
+                    if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)
+                    {
+                        entry.DataType = attr.Type.ToString();
+                        entry.Length = attr.Length;
+                        entry.Decimals = attr.Decimals;
+                    }
+
+                    // ENRICHMENT: Tables root info
+                    if (obj is global::Artech.Genexus.Common.Objects.Table tbl)
+                    {
+                        entry.RootTable = tbl.Name;
+                    }
+
+                    // BUSINESS DOMAIN: Basic inference
+                    if (obj.Name.Contains("_"))
+                    {
+                        entry.BusinessDomain = obj.Name.Split('_')[0];
+                    }
+
+                    concurrentDict.TryAdd(string.Format("{0}:{1}", entry.Type, entry.Name), entry);
                     
                     var current = System.Threading.Interlocked.Increment(ref processed);
                     if (current % 1000 == 0) {
-                        Logger.Info($"Progress: {current}/{total} objects indexed...");
+                        Logger.Info(string.Format("Progress: {0}/{1} objects indexed...", current, total));
                     }
                 });
 

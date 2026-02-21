@@ -103,7 +103,7 @@ namespace GxMcp.Worker.Services
             return null;
         }
 
-        public string ReadObjectSource(string target, string partName)
+        public string ReadObjectSource(string target, string partName, int? offset = null, int? limit = null)
         {
             var sw = Stopwatch.StartNew();
             try
@@ -114,7 +114,6 @@ namespace GxMcp.Worker.Services
                 Guid partGuid = MapLogicalPartToGuid(obj.TypeDescriptor.Name, partName);
                 
                 global::Artech.Architecture.Common.Objects.KBObjectPart part = null;
-                // SPEED: Manual loop on Parts collection (already loaded by FindObject)
                 foreach (global::Artech.Architecture.Common.Objects.KBObjectPart p in obj.Parts)
                 {
                     if (p.Type == partGuid) { part = p; break; }
@@ -122,19 +121,39 @@ namespace GxMcp.Worker.Services
 
                 if (part == null) return "{\"error\": \"Part '" + partName + "' not found.\"}";
 
-                JObject result;
+                JObject result = new JObject();
                 if (part is global::Artech.Architecture.Common.Objects.ISource sourcePart)
                 {
                     string content = sourcePart.Source;
-                    Logger.Info($"ReadSource (Text) SUCCESS in {sw.ElapsedMilliseconds}ms");
-                    result = new JObject { ["source"] = content };
+                    
+                    // Optimization: Pagination by lines
+                    if (offset.HasValue || limit.HasValue)
+                    {
+                        string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                        int start = offset ?? 0;
+                        int count = limit ?? (lines.Length - start);
+                        
+                        if (start < 0) start = 0;
+                        if (start >= lines.Length) count = 0;
+                        else if (start + count > lines.Length) count = lines.Length - start;
+
+                        string paginatedContent = string.Join(Environment.NewLine, lines.Skip(start).Take(count));
+                        result["source"] = paginatedContent;
+                        result["offset"] = start;
+                        result["limit"] = count;
+                        result["totalLines"] = lines.Length;
+                        Logger.Info(string.Format("ReadSource (Paginated {0}-{1}) SUCCESS in {2}ms", start, start+count, sw.ElapsedMilliseconds));
+                    }
+                    else
+                    {
+                        result["source"] = content;
+                        Logger.Info(string.Format("ReadSource (Full Text) SUCCESS in {0}ms", sw.ElapsedMilliseconds));
+                    }
                 }
                 else
                 {
-                    // Phase 5: XML Part Handling
-                    string xml = part.SerializeToXml();
-                    Logger.Info($"ReadSource (XML) SUCCESS in {sw.ElapsedMilliseconds}ms");
-                    result = new JObject { ["xml"] = xml };
+                    result["xml"] = part.SerializeToXml();
+                    Logger.Info(string.Format("ReadSource (XML) SUCCESS in {0}ms", sw.ElapsedMilliseconds));
                 }
 
                 // Holistic Data Vision Integration
