@@ -12,7 +12,8 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     private _readCache = new Map<string, { data: Uint8Array, time: number }>(); // Read cache from Worker for performance
     private _pendingReadRequests = new Map<string, Promise<Uint8Array>>();
     private _dirCache = new Map<string, { entries: [string, vscode.FileType][], time: number }>();
-    private readonly VALID_TYPES = new Set(['Procedure', 'Transaction', 'WebPanel', 'DataProvider', 'Attribute', 'Table', 'DataView', 'SDPanel']);
+    private _metadataCache = new Map<string, string>(); // Persistent Shadowing for Trn/SDT structures
+    private readonly VALID_TYPES = new Set(['Procedure', 'Transaction', 'WebPanel', 'DataProvider', 'Attribute', 'Table', 'DataView', 'SDPanel', 'SDT', 'StructuredDataType']);
 
     public setPart(uri: vscode.Uri, partName: string) {
         console.log(`[Nexus IDE] setPart: Setting ${uri.path} to ${partName}`);
@@ -20,9 +21,9 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         this._readCache.delete(this.getCacheKey(uri, partName)); // Invalidate specific part cache
         this._contentCache.delete(uri.toString()); // Invalidate shadowing cache for this URI
 
-        // Note: We DON'T update mtime here anymore to avoid triggering VS Code's "file changed on disk" 
-        // while the user is simply switching views. VS Code will call readFile and we will return
-        // the new part content.
+        // Update mtime to force VS Code to reload the document
+        this._mtimes.set(uri.toString(), Date.now()); 
+        
         this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]); // Notify VS Code of change
     }
 
@@ -36,8 +37,54 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     public async initKb() {
-        console.log("[Nexus IDE] Warming up KB...");
-        return this.callGateway({ method: "execute_command", params: { module: 'KB', action: 'Initialize' } });
+        console.log("[Nexus IDE] Warming up KB and pre-fetching common modules...");
+        const initPromise = this.callGateway({ method: "execute_command", params: { module: 'KB', action: 'Initialize' } });
+        
+        // PERFORMANCE: Pre-fetch Root and Common Modules in parallel with KB Init
+        initPromise.then(() => {
+            const commonParents = ['Root Module', 'General', 'Common', 'API'];
+            commonParents.forEach(parent => {
+                this.readDirectory(vscode.Uri.parse(`genexus:/${parent === 'Root Module' ? '' : parent}`));
+            });
+
+            // PERFORMANCE: Background Metadata Shadowing for structured objects
+            setTimeout(() => this.shadowMetadata(), 5000);
+        });
+
+        return initPromise;
+    }
+
+    private async shadowMetadata() {
+        try {
+            console.log("[Nexus IDE] Background Shadowing: Fetching important structures...");
+            // Get top 20 transactions/sdts for shadowing
+            const result = await this.callGateway({
+                method: "execute_command",
+                params: { module: 'Search', query: 'type:Transaction or type:SDT', limit: 20 }
+            });
+
+            if (result && result.results) {
+                for (const obj of result.results) {
+                    const uri = vscode.Uri.parse(`genexus:/${obj.type}/${obj.name}.gx`);
+                    const part = (obj.type === 'Transaction') ? 'Structure' : 'Source';
+                    this.fetchAndCacheMetadata(uri, obj.name, part);
+                }
+            }
+        } catch (e) {
+            console.error("[Nexus IDE] Shadowing failed:", e);
+        }
+    }
+
+    private async fetchAndCacheMetadata(uri: vscode.Uri, objName: string, partName: string) {
+        try {
+            const res = await this.callGateway({
+                method: "execute_command",
+                params: { module: 'Read', action: 'ExtractSource', target: objName, part: partName }
+            });
+            if (res && res.source) {
+                this._metadataCache.set(uri.toString() + ":" + partName, res.source);
+            }
+        } catch {}
     }
 
     watch(_uri: vscode.Uri, _options: { recursive: boolean; excludes: string[] }): vscode.Disposable {
@@ -78,7 +125,8 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         const cacheKey = `dir:${path}`;
         
         const cached = this._dirCache.get(cacheKey);
-        if (cached && (Date.now() - cached.time < 60000)) return cached.entries;
+        // PERFORMANCE: Increased cache time to 5 minutes for directories
+        if (cached && (Date.now() - cached.time < 300000)) return cached.entries;
 
         try {
             // IF path is one of the standard GX types (Procedure, etc.), search by TYPE instead of parent
@@ -114,6 +162,10 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         const partName = this.getPart(uri);
         const cacheKey = this.getCacheKey(uri, partName);
         
+        // PERFORMANCE: Shadowing - Prefer metadata cache for Structures/SDTs
+        const shadowed = this._metadataCache.get(uri.toString() + ":" + partName);
+        if (shadowed) return Buffer.from(shadowed, 'utf8');
+
         if (this._contentCache.has(uri.toString())) {
             return this._contentCache.get(uri.toString())!;
         }

@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { GxFileSystemProvider } from './gxFileSystem';
 import { GxDocumentSymbolProvider } from './symbolProvider';
 import { GxTreeProvider, GxTreeItem } from './gxTreeProvider';
 import { GxDefinitionProvider } from './definitionProvider';
 import { GxHoverProvider } from './hoverProvider';
+import { GxCompletionItemProvider } from './completionProvider';
+import { GxSignatureHelpProvider } from './signatureHelpProvider';
 
 export function activate(context: vscode.ExtensionContext) {
     const provider = new GxFileSystemProvider();
@@ -27,6 +30,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider('genexus', new GxDocumentSymbolProvider()));
     context.subscriptions.push(vscode.languages.registerDefinitionProvider('genexus', new GxDefinitionProvider()));
     context.subscriptions.push(vscode.languages.registerHoverProvider('genexus', new GxHoverProvider((cmd) => provider.callGateway(cmd))));
+    context.subscriptions.push(vscode.languages.registerCompletionItemProvider('genexus', new GxCompletionItemProvider((cmd) => provider.callGateway(cmd)), '.', '&'));
+    context.subscriptions.push(vscode.languages.registerSignatureHelpProvider('genexus', new GxSignatureHelpProvider(), '(', ','));
 
     // --- INSTANT ACTIVATION ---
     // 1. Add virtual folder IMMEDIATELY (No delay, no await)
@@ -47,21 +52,86 @@ export function activate(context: vscode.ExtensionContext) {
         console.error("[Nexus IDE] Background init failed:", e);
     });
 
-    // Switch Part Commands
-    const switchPart = async (partName: string) => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor || editor.document.uri.scheme !== 'genexus') return;
+    const webviewPanels = new Map<string, vscode.WebviewPanel>();
 
-        console.log(`[Nexus IDE] switchPart: Changing part to ${partName} for ${editor.document.uri.fsPath}`);
-        provider.setPart(editor.document.uri, partName);
+    // Webview layout preview
+    const showWebviewLayout = async (targetUri: vscode.Uri) => {
+        const path = decodeURIComponent(targetUri.path.substring(1));
+        const objName = path.split('/').pop()!.replace('.gx', '');
+        const uriKey = targetUri.toString();
+
+        if (webviewPanels.has(uriKey)) {
+            webviewPanels.get(uriKey)!.reveal(vscode.ViewColumn.Beside);
+            return;
+        }
+
+        const panel = vscode.window.createWebviewPanel(
+            'gxLayout',
+            `${objName} Layout`,
+            vscode.ViewColumn.Beside,
+            { enableScripts: true, enableCommandUris: true }
+        );
+
+        webviewPanels.set(uriKey, panel);
+        panel.onDidDispose(() => webviewPanels.delete(uriKey));
+
+        panel.webview.html = "<h1>Carregando Layout...</h1>";
         
+        try {
+            const result = await provider.callGateway({
+                method: "execute_command",
+                params: { module: 'Read', action: 'ExtractSource', target: objName, part: 'Layout' }
+            });
+            if (result && result.source) {
+                panel.webview.html = result.source;
+            } else {
+                panel.webview.html = "<h1>Erro ao carregar Layout</h1>";
+            }
+        } catch (e) {
+            panel.webview.html = `<h1>Erro Crítico: ${e}</h1>`;
+        }
+    };
+
+    // Switch Part Commands
+    const switchPart = async (partName: string, uri?: vscode.Uri) => {
+        let targetUri = uri;
+        if (!targetUri) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === 'genexus') {
+                targetUri = editor.document.uri;
+            } else {
+                // Try to find any visible genexus editor
+                const gxEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.scheme === 'genexus');
+                if (gxEditor) targetUri = gxEditor.document.uri;
+            }
+        }
+        
+        if (!targetUri) return;
+
+        // If it's Layout, open a Webview Beside the editor
+        if (partName === 'Layout') {
+            await showWebviewLayout(targetUri);
+            return;
+        }
+
+        console.log(`[Nexus IDE] switchPart: Changing part to ${partName} for ${targetUri.fsPath}`);
+        provider.setPart(targetUri, partName);
+        
+        // Force VS Code to re-open the same URI to pick up the new part content
+        await vscode.commands.executeCommand('vscode.open', targetUri, {
+            preview: false,
+            preserveFocus: true
+        });
+
         vscode.window.setStatusBarMessage(`Switched to ${partName}`, 2000);
     };
 
-    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Source', () => switchPart('Source')));
-    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Rules', () => switchPart('Rules')));
-    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Events', () => switchPart('Events')));
-    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Variables', () => switchPart('Variables')));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Source', (u) => switchPart('Source', u)));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Rules', (u) => switchPart('Rules', u)));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Events', (u) => switchPart('Events', u)));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Variables', (u) => switchPart('Variables', u)));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Structure', (u) => switchPart('Structure', u)));
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.switchPart.Layout', (u) => switchPart('Layout', u)));
 
     context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.forceSave', async () => {
         const editor = vscode.window.activeTextEditor;

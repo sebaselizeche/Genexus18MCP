@@ -95,6 +95,19 @@ namespace GxMcp.Worker.Services
                 var obj = FindObject(target);
                 if (obj == null) return "{\"error\": \"Object not found\"}";
 
+                // Special handling for Layout
+                if (partName.Equals("layout", StringComparison.OrdinalIgnoreCase))
+                {
+                    var uiContextJson = _uiService.GetUIContext(target);
+                    var uiObj = JObject.Parse(uiContextJson);
+                    if (uiObj["html"] != null)
+                    {
+                        var layoutResult = new JObject();
+                        layoutResult["source"] = uiObj["html"].ToString();
+                        return layoutResult.ToString();
+                    }
+                }
+
                 Guid partGuid = MapLogicalPartToGuid(obj.TypeDescriptor.Name, partName);
                 
                 KBObjectPart part = null;
@@ -159,7 +172,8 @@ namespace GxMcp.Worker.Services
                 }
                 else
                 {
-                    result["xml"] = part.SerializeToXml();
+                    result["source"] = part.SerializeToXml();
+                    Logger.Info("ReadSource (XML serialized) SUCCESS");
                 }
 
                 return result.ToString();
@@ -227,6 +241,8 @@ namespace GxMcp.Worker.Services
                 if (p == "events" || p == "source" || p == "code") return Guid.Parse("c44bd5ff-f918-415b-98e6-aca44fed84fa");
                 if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
                 if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
+                if (p == "layout") return Guid.Parse("ad3ca970-19d0-44e1-a7b7-db05556e820c");
+                if (p == "webform") return Guid.Parse("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
             }
 
             if (objType.Equals("Transaction", StringComparison.OrdinalIgnoreCase))

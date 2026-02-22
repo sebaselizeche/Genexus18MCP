@@ -48,6 +48,10 @@
       <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Common.Helpers.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Artech.Common.Controls">
+      <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Common.Controls.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Artech.Common">
       <HintPath>C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Common.dll</HintPath>
       <Private>False</Private>
@@ -61,6 +65,7 @@
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.Web" />
   </ItemGroup>
 
   <ItemGroup>

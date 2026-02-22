@@ -21,6 +21,15 @@ namespace GxMcp.Worker.Services
         {
             _buildService = buildService;
             _indexCacheService = indexCacheService;
+
+            // PERFORMANCE: Eager KB Opening in background if path is already known
+            string kbPath = Environment.GetEnvironmentVariable("GX_KB_PATH");
+            if (!string.IsNullOrEmpty(kbPath))
+            {
+                System.Threading.Tasks.Task.Run(() => {
+                    try { EnsureKbOpen(); } catch { }
+                });
+            }
         }
 
         public global::Artech.Architecture.Common.Objects.KnowledgeBase GetKB() 

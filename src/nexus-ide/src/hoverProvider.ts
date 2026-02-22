@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { nativeFunctions } from './gxNativeFunctions';
 
 export class GxHoverProvider implements vscode.HoverProvider {
     constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
@@ -15,8 +16,48 @@ export class GxHoverProvider implements vscode.HoverProvider {
         // Filter out keywords or very small words to avoid noise
         if (word.length < 3) return undefined;
 
+        // 1. Check Native Functions first (Fast, Local)
+        const nativeFunc = nativeFunctions.find(f => f.name.toLowerCase() === word.toLowerCase());
+        if (nativeFunc) {
+            const markdown = new vscode.MarkdownString();
+            markdown.appendMarkdown(`### (Native) **${nativeFunc.name}**\n\n`);
+            markdown.appendMarkdown(`${nativeFunc.description}\n\n`);
+            markdown.appendMarkdown(`**Syntax:** \`${nativeFunc.name}${nativeFunc.parameters}\`\n\n`);
+            markdown.appendMarkdown(`**Returns:** \`${nativeFunc.returnType}\`\n\n`);
+            if (nativeFunc.example) {
+                markdown.appendMarkdown(`---\n**Example:**\n`);
+                markdown.appendCodeblock(nativeFunc.example, 'genexus');
+            }
+            return new vscode.Hover(markdown);
+        }
+
+        // 2. Check for Local Variables (starts with &)
+        if (word.startsWith('&')) {
+            const varName = word.substring(1).toLowerCase();
+            try {
+                const path = decodeURIComponent(document.uri.path.substring(1));
+                const objName = path.split('/').pop()!.replace('.gx', '');
+                const variables = await this.callGateway({
+                    method: "execute_command",
+                    params: { module: 'Read', action: 'GetVariables', target: objName }
+                });
+                
+                if (Array.isArray(variables)) {
+                    const variable = variables.find(v => v.name.toLowerCase() === varName);
+                    if (variable) {
+                        const markdown = new vscode.MarkdownString();
+                        markdown.appendMarkdown(`### (Variable) **&${variable.name}**\n\n`);
+                        markdown.appendMarkdown(`**Type:** \`${variable.type}\`\n\n`);
+                        return new vscode.Hover(markdown);
+                    }
+                }
+            } catch (e) {
+                console.error("[Nexus IDE] Error fetching variable hover:", e);
+            }
+        }
+
         try {
-            // Search for the object in the index
+            // 3. Search for the object in the index (Remote)
             const result = await this.callGateway({
                 method: 'execute_command',
                 params: { module: 'Search', query: word, limit: 1 }

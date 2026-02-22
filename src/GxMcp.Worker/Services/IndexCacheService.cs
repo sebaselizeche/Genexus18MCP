@@ -120,7 +120,14 @@ namespace GxMcp.Worker.Services
                 {
                     string dir = Path.GetDirectoryName(_indexPath);
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                    File.WriteAllText(_indexPath, _index.ToJson());
+                    
+                    // PERFORMANCE: Use optimized JSON settings for faster serialization
+                    var settings = new Newtonsoft.Json.JsonSerializerSettings { 
+                        NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+                        DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore
+                    };
+                    string json = Newtonsoft.Json.JsonConvert.SerializeObject(_index, settings);
+                    File.WriteAllText(_indexPath, json);
                     Logger.Debug("Index flushed to disk (Background)");
                 }
                 catch (Exception ex) { Logger.Error("Flush Error: " + ex.Message); }

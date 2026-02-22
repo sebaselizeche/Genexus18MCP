@@ -92,7 +92,7 @@ namespace GxMcp.Worker.Services
 
                 var startInfo = new ProcessStartInfo {
                     FileName = _msbuildPath,
-                    Arguments = "/nologo /v:m /target:Execute \"" + tempFile + "\"",
+                    Arguments = "/nologo /m /v:q /target:Execute \"" + tempFile + "\"", // PERFORMANCE: /m (parallel) and /v:q (quiet)
                     UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
                     CreateNoWindow = true, WorkingDirectory = _gxDir
                 };

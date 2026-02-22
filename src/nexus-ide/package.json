@@ -113,6 +113,10 @@
       {
         "command": "nexus-ide.switchPart.Events",
         "title": "Events"
+      },
+      {
+        "command": "nexus-ide.switchPart.Layout",
+        "title": "Layout"
       }
     ],
     "menus": {
@@ -169,6 +173,11 @@
           "command": "nexus-ide.switchPart.Variables",
           "group": "navigation@4",
           "when": "resourceScheme == genexus"
+        },
+        {
+          "command": "nexus-ide.switchPart.Layout",
+          "group": "navigation@5",
+          "when": "resourceScheme == genexus && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\//"
         }
       ]
     }
