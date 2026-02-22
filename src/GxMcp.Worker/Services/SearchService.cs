@@ -38,8 +38,17 @@ namespace GxMcp.Worker.Services
                 if (index == null || index.Objects.Count == 0)
                     return "{\"error\": \"Search index not found or empty. Please run 'genexus_bulk_index' first.\"}";
 
-                // HEURISTIC: If query looks like "Type:Name", split it
-                if (!string.IsNullOrEmpty(query) && query.Contains(":") && !query.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
+                // HEURISTIC: If query looks like "Type:Name" (e.g. "Procedure:MyProc"), split it.
+                // Must NOT fire for filter-keyword queries (parent:, type:, domain:, etc.) or
+                // they get mis-parsed as type filters and the real filter is lost.
+                if (!string.IsNullOrEmpty(query) && query.Contains(":")
+                    && !query.StartsWith("parent:",    StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("usedby:",    StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("type:",      StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("domain:",    StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("calls:",     StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("calledby:",  StringComparison.OrdinalIgnoreCase)
+                    && !query.StartsWith("uses:",      StringComparison.OrdinalIgnoreCase))
                 {
                     var parts = query.Split(':');
                     if (parts.Length == 2)
@@ -55,6 +64,24 @@ namespace GxMcp.Worker.Services
 
                 var results = new List<RankedResult>();
 
+                // Fast path: pure parent browse with no text terms — use pre-built index
+                if (!string.IsNullOrEmpty(criteria.ParentFilter) && criteria.Terms.Count == 0
+                    && string.IsNullOrEmpty(criteria.TypeFilter) && string.IsNullOrEmpty(criteria.DomainFilter)
+                    && (query == null || !query.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
+                    && index.ChildrenByParent != null)
+                {
+                    if (index.ChildrenByParent.TryGetValue(criteria.ParentFilter, out var children))
+                    {
+                        foreach (var entry in children)
+                        {
+                            if (string.Equals(entry.Name, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                            int score = (entry.Type.Equals("Folder", StringComparison.OrdinalIgnoreCase) || entry.Type.Equals("Module", StringComparison.OrdinalIgnoreCase)) ? 1000 : 1;
+                            results.Add(new RankedResult { Entry = entry, Score = score });
+                        }
+                    }
+                }
+                else
+                {
                 foreach (var entry in index.Objects.Values)
                 {
                     // 0. Impact Analysis Mode
@@ -72,8 +99,12 @@ namespace GxMcp.Worker.Services
                     bool matches = true;
                     if (!string.IsNullOrEmpty(criteria.TypeFilter) && !IsTypeMatch(entry.Type, criteria.TypeFilter)) matches = false;
                     if (matches && !string.IsNullOrEmpty(criteria.DomainFilter) && !string.Equals(entry.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
-                    
-                    if (!matches && string.IsNullOrEmpty(query)) continue; 
+                    if (matches && !string.IsNullOrEmpty(criteria.ParentFilter) && !string.Equals(entry.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
+
+                    // HEURISTIC: Prevent recursion by excluding the parent itself from its children list
+                    if (matches && !string.IsNullOrEmpty(criteria.ParentFilter) && string.Equals(entry.Name, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
+
+                    if (!matches && string.IsNullOrEmpty(query)) continue;
 
                     // 2. Text Scoring (Soft match)
                     int score = 0;
@@ -86,10 +117,16 @@ namespace GxMcp.Worker.Services
                     else if (matches)
                     {
                         score = 1;
+                        if (entry.Type.Equals("Folder", StringComparison.OrdinalIgnoreCase) ||
+                            entry.Type.Equals("Module", StringComparison.OrdinalIgnoreCase))
+                        {
+                            score = 1000; // Prioritize folders/modules in browsing
+                        }
                     }
                     else { continue; }
 
                     results.Add(new RankedResult { Entry = entry, Score = score });
+                }
                 }
 
                 var finalResults = results
@@ -106,6 +143,8 @@ namespace GxMcp.Worker.Services
                         dict["connections"] = (r.Entry.Calls?.Count ?? 0) + (r.Entry.CalledBy?.Count ?? 0);
                         if (!string.IsNullOrEmpty(r.Entry.ParmRule)) dict["parm"] = r.Entry.ParmRule;
                         if (!string.IsNullOrEmpty(r.Entry.SourceSnippet)) dict["snippet"] = r.Entry.SourceSnippet;
+                        if (!string.IsNullOrEmpty(r.Entry.Parent)) dict["parent"] = r.Entry.Parent;
+                        if (!string.IsNullOrEmpty(r.Entry.Module)) dict["module"] = r.Entry.Module;
                         return dict;
                     })
                     .ToList();
@@ -126,6 +165,31 @@ namespace GxMcp.Worker.Services
             var criteria = new SearchCriteria();
             if (string.IsNullOrEmpty(query)) return criteria;
 
+            // Simple heuristic for parent:"Value With Space" or parent:ValueWithNoSpace
+            if (query.Contains("parent:"))
+            {
+                int idx = query.IndexOf("parent:");
+                string rest = query.Substring(idx + 7);
+                // If it starts with quote, find ending quote
+                if (rest.StartsWith("\"")) {
+                    int end = rest.IndexOf("\"", 1);
+                    if (end > 0) {
+                        criteria.ParentFilter = rest.Substring(1, end - 1);
+                        query = query.Remove(idx, 7 + end + 1);
+                    }
+                } else {
+                    // Find next space or end of string
+                    int end = rest.IndexOf(" ");
+                    if (end > 0) {
+                        criteria.ParentFilter = rest.Substring(0, end);
+                        query = query.Remove(idx, 7 + end);
+                    } else {
+                        criteria.ParentFilter = rest;
+                        query = query.Remove(idx);
+                    }
+                }
+            }
+
             var parts = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             foreach (var part in parts)
             {
@@ -141,13 +205,12 @@ namespace GxMcp.Worker.Services
                         case "calls": criteria.CallsFilter = val; break;
                         case "calledby": criteria.CalledByFilter = val; break;
                         case "uses": criteria.UsesFilter = val; break;
-                        default: criteria.Terms.Add(part); break; // Treat unknown prefix as literal text
+                        default: criteria.Terms.Add(part); break;
                     }
                 }
                 else
                 {
                     criteria.Terms.Add(part);
-                    // Add synonyms for main terms
                     if (BusinessSynonyms.TryGetValue(part, out var synonyms))
                         foreach (var syn in synonyms) criteria.Terms.Add(syn);
                 }
@@ -216,6 +279,7 @@ namespace GxMcp.Worker.Services
             public string CallsFilter { get; set; }
             public string CalledByFilter { get; set; }
             public string UsesFilter { get; set; }
+            public string ParentFilter { get; set; }
             public HashSet<string> Terms { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
     }

@@ -4,184 +4,233 @@ using System.Linq;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
+using System.Reflection;
 
 namespace GxMcp.Worker.Services
 {
     public class WriteService
     {
         private readonly ObjectService _objectService;
-
-        // GUIDs
-        private static readonly Guid PART_PROCEDURE = new Guid("528d1c06-a9c2-420d-bd35-21dca83f12ff");
-        private static readonly Guid PART_RULES     = new Guid("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
-        private static readonly Guid PART_EVENTS    = new Guid("c44bd5ff-f918-415b-98e6-aca44fed84fa");
-        private static readonly Guid PART_VARIABLES = new Guid("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
-        private static readonly Guid PART_WEB_FORM  = new Guid("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
+        private static readonly object _flushLock = new object();
+        private static System.Timers.Timer _flushTimer;
+        private static bool _pendingCommit = false;
 
         public WriteService(ObjectService objectService)
         {
             _objectService = objectService;
+            InitializeFlushTimer();
+        }
+
+        private void InitializeFlushTimer()
+        {
+            if (_flushTimer != null) return;
+            lock (_flushLock)
+            {
+                if (_flushTimer != null) return;
+                _flushTimer = new System.Timers.Timer(2000); // 2 seconds debounce
+                _flushTimer.AutoReset = false;
+                _flushTimer.Elapsed += (s, e) => FlushBackground();
+            }
+        }
+
+        private void FlushBackground()
+        {
+            if (!_pendingCommit) return;
+            
+            lock (_flushLock)
+            {
+                if (!_pendingCommit) return;
+                try
+                {
+                    Logger.Info("[BACKGROUND-FLUSH] Starting commits...");
+                    var kb = _objectService.GetKbService().GetKB();
+                    if (kb == null) return;
+
+                    // Commits
+                    var model = kb.DesignModel;
+                    if (model != null) {
+                        try {
+                            var modelCommit = model.GetType().GetMethod("Commit", BindingFlags.Public | BindingFlags.Instance);
+                            modelCommit?.Invoke(model, null);
+                            Logger.Info("[BACKGROUND-FLUSH] Model.Commit() successful.");
+                        } catch (Exception ex) { Logger.Debug("[BACKGROUND-FLUSH] Model.Commit skipped: " + ex.Message); }
+                    }
+                    
+                    try {
+                        var kbCommit = kb.GetType().GetMethod("Commit", BindingFlags.Public | BindingFlags.Instance);
+                        kbCommit?.Invoke(kb, null);
+                        Logger.Info("[BACKGROUND-FLUSH] KB.Commit() successful.");
+                    } catch (Exception ex) { Logger.Debug("[BACKGROUND-FLUSH] KB.Commit skipped: " + ex.Message); }
+
+                    _pendingCommit = false;
+                    Logger.Info("[BACKGROUND-FLUSH] Full commit cycle complete.");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("[BACKGROUND-FLUSH] ERROR: " + ex.Message);
+                }
+            }
+        }
+
+        private void ScheduleFlush()
+        {
+            _pendingCommit = true;
+            _flushTimer.Stop();
+            _flushTimer.Start();
         }
 
         public string WriteObject(string target, string partName, string code)
         {
             try
             {
+                Logger.Info(string.Format("[DEBUG-SAVE] Request received for {0} (Part: {1}, Code Length: {2})", target, partName, code?.Length ?? 0));
+                
                 var obj = _objectService.FindObject(target);
-                if (obj == null) return "{\"error\": \"Object not found\"}";
+                if (obj == null) {
+                    Logger.Error("[DEBUG-SAVE] Object NOT FOUND: " + target);
+                    return "{\"error\": \"Object not found\"}";
+                }
+
+                Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
 
                 Guid partGuid = MapLogicalPartToGuid(obj.TypeDescriptor.Name, partName);
-                
-                global::Artech.Architecture.Common.Objects.KBObjectPart part = null;
-                foreach (global::Artech.Architecture.Common.Objects.KBObjectPart p in obj.Parts)
+                global::Artech.Architecture.Common.Objects.KBObjectPart part = obj.Parts.Cast<global::Artech.Architecture.Common.Objects.KBObjectPart>().FirstOrDefault(p => p.Type == partGuid);
+
+                if (part == null && (partName.Equals("Source", StringComparison.OrdinalIgnoreCase) || partName.Equals("Code", StringComparison.OrdinalIgnoreCase)))
                 {
-                    if (p.Type == partGuid) { part = p; break; }
+                    part = obj.Parts.Cast<global::Artech.Architecture.Common.Objects.KBObjectPart>().FirstOrDefault(p => p is global::Artech.Architecture.Common.Objects.ISource);
                 }
 
-                if (part == null) return "{\"error\": \"Part '" + partName + "' not found in this object.\"}";
-
-                var sourcePart = part as global::Artech.Architecture.Common.Objects.ISource;
-                if (sourcePart == null) return "{\"error\": \"Part is not a source part\"}";
-
-                sourcePart.Source = code;
-
-                // Phase 1: Surgical Variable Injection
-                if (partGuid == PART_PROCEDURE || partGuid == PART_EVENTS)
-                {
-                    VariableInjector.InjectVariables(obj, code);
-                    
-                    // Phase 16: Table Dependency Injection (Frente 16)
-                    var index = _objectService.GetIndex();
-                    TableDependencyInjector.InjectTableDependencies(obj, code, index);
+                if (part == null) {
+                    Logger.Error("[DEBUG-SAVE] Part NOT FOUND in object: " + partName);
+                    return "{\"error\": \"Part not found\"}";
                 }
 
+                Logger.Debug(string.Format("[DEBUG-SAVE] Target Part: {0} (Type: {1})", part.Type, part.GetType().Name));
+
+                // 1. SET CONTENT
+                bool contentSet = false;
+                if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
+                {
+                    Logger.Debug("[DEBUG-SAVE] Updating Variables via SetVariablesFromText...");
+                    VariableInjector.SetVariablesFromText(varPart, code);
+                    contentSet = true;
+                }
+                else if (part is global::Artech.Architecture.Common.Objects.ISource sourcePart)
+                {
+                    Logger.Debug("[DEBUG-SAVE] Updating ISource.Source content...");
+                    sourcePart.Source = code;
+                    contentSet = true;
+                }
+                else
+                {
+                    // Fallback for non-ISource parts (like Structure)
+                    Logger.Debug("[DEBUG-SAVE] Attempting generic persistence for non-ISource part...");
+                    try {
+                        // For structured parts, we try SerializeFromXml first if it looks like XML
+                        if (code.Trim().StartsWith("<")) {
+                            part.DeserializeFromXml(code);
+                            contentSet = true;
+                            Logger.Debug("[DEBUG-SAVE] Content set via DeserializeFromXml.");
+                        } else {
+                            // Try to find a property like 'Source' or 'Content' via reflection
+                            var contentProp = part.GetType().GetProperty("Source", BindingFlags.Public | BindingFlags.Instance)
+                                           ?? part.GetType().GetProperty("Content", BindingFlags.Public | BindingFlags.Instance);
+                            if (contentProp != null && contentProp.CanWrite) {
+                                contentProp.SetValue(part, code);
+                                contentSet = true;
+                                Logger.Debug("[DEBUG-SAVE] Content set via property: " + contentProp.Name);
+                            }
+                        }
+                    } catch (Exception ex) { Logger.Error("[DEBUG-SAVE] Generic persistence FAILED: " + ex.Message); }
+                }
+
+                if (!contentSet) {
+                    Logger.Warn("[DEBUG-SAVE] No suitable method found to update part content.");
+                }
+
+                // 2. FORCE DIRTY (Crucial)
+                try {
+                    // Mark Part as Dirty
+                    var pType = part.GetType();
+                    var pDirtyProp = pType.GetProperty("Dirty", BindingFlags.Public | BindingFlags.Instance) 
+                                  ?? pType.GetProperty("IsDirty", BindingFlags.Public | BindingFlags.Instance);
+                    if (pDirtyProp != null) {
+                        pDirtyProp.SetValue(part, true);
+                        Logger.Debug("[DEBUG-SAVE] Part property '" + pDirtyProp.Name + "' set to TRUE");
+                    }
+
+                    // Mark Header Object as Dirty (Essential for Save)
+                    var oType = obj.GetType();
+                    var oDirtyProp = oType.GetProperty("Dirty", BindingFlags.Public | BindingFlags.Instance)
+                                  ?? oType.GetProperty("IsDirty", BindingFlags.Public | BindingFlags.Instance);
+                    if (oDirtyProp != null) {
+                        oDirtyProp.SetValue(obj, true);
+                        Logger.Debug("[DEBUG-SAVE] Object property '" + oDirtyProp.Name + "' set to TRUE");
+                    }
+                } catch (Exception ex) { Logger.Debug("[DEBUG-SAVE] Force Dirty failed: " + ex.Message); }
+
+                // 3. PERSISTENCE SEQUENCE
                 try
                 {
+                    // Checkout
+                    try {
+                        var checkoutMethod = obj.GetType().GetMethod("Checkout", BindingFlags.Public | BindingFlags.Instance);
+                        checkoutMethod?.Invoke(obj, null);
+                        Logger.Debug("[DEBUG-SAVE] SDK Checkout invoked.");
+                    } catch { }
+
+                    Logger.Info("[DEBUG-SAVE] Invoking obj.Save()...");
                     obj.Save();
-                    // Auto-Sync Cache
+                    Logger.Info("[DEBUG-SAVE] obj.Save() completed (Fast Save).");
+                    
+                    // Trigger background flush for long-lasting persistence
+                    ScheduleFlush();
+
                     _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
+                    Logger.Info("[DEBUG-SAVE] FAST SAVE SUCCESSFUL.");
+                    return "{\"status\": \"Success\"}";
                 }
                 catch (Exception saveEx)
                 {
-                    Logger.Error($"Native SDK Save Exception on {obj.Name}: {saveEx.Message}");
+                    Logger.Error("[DEBUG-SAVE] CRITICAL SDK EXCEPTION: " + saveEx.ToString());
+                    return "{\"error\": \"SDK Save failed: " + saveEx.Message + "\"}";
                 }
-
-                // Phase 2: High-Fidelity Diagnostics (Messages via SaveOutput)
-                var output = obj.SaveOutput;
-                var msgs = new JArray();
-                bool hasErrors = false;
-
-                if (output != null)
-                {
-                    hasErrors = output.HasErrors;
-                    try
-                    {
-                        foreach (var m in output)
-                        {
-                            var jm = new JObject();
-                            if (m is global::Artech.Common.Diagnostics.OutputError err)
-                            {
-                                jm["id"] = err.ErrorCode;
-                                jm["text"] = err.Text;
-                                jm["level"] = err.Level.ToString();
-                                if (err.Level == global::Artech.Common.Diagnostics.MessageLevel.Error) hasErrors = true;
-                            }
-                            else
-                            {
-                                jm["text"] = m.ToString();
-                            }
-                            msgs.Add(jm);
-                        }
-                    }
-                    catch
-                    {
-                        if (!string.IsNullOrEmpty(output.ErrorText))
-                        {
-                            msgs.Add(new JObject { ["text"] = output.ErrorText });
-                            hasErrors = true;
-                        }
-                    }
-                }
-
-                if (hasErrors)
-                {
-                    // Phase 6: Self-Healing (Frente 6)
-                    var index = _objectService.GetIndex();
-                    var healing = HealingService.AttemptHealing(code, msgs, index);
-                    if (healing.Healed)
-                    {
-                        Logger.Info($"[Self-Healing] Retrying save with corrected code for {obj.Name}");
-                        sourcePart.Source = healing.NewCode;
-                        obj.Save();
-                        
-                        // Check if retry was successful
-                        if (!obj.SaveOutput.HasErrors)
-                        {
-                            Logger.Info($"[Self-Healing] {obj.Name} saved successfully after correction.");
-                            return new JObject { 
-                                ["status"] = "Success", 
-                                ["healed"] = true, 
-                                ["action"] = healing.ActionTaken 
-                            }.ToString();
-                        }
-                        else
-                        {
-                            Logger.Warn($"[Self-Healing] {obj.Name} still has errors after correction.");
-                            // Re-capture messages from failed retry
-                            msgs = new JArray();
-                            foreach (var m in obj.SaveOutput)
-                            {
-                                var jm = new JObject();
-                                if (m is global::Artech.Common.Diagnostics.OutputError err)
-                                {
-                                    jm["id"] = err.ErrorCode;
-                                    jm["text"] = err.Text;
-                                    jm["level"] = err.Level.ToString();
-                                }
-                                else jm["text"] = m.ToString();
-                                msgs.Add(jm);
-                            }
-                        }
-                    }
-
-                    Logger.Warn($"Object {obj.Name} saved with errors.");
-                    return new JObject { ["status"] = "Error", ["messages"] = msgs }.ToString();
-                }
-
-                if (msgs.Count > 0)
-                {
-                    Logger.Info($"Object {obj.Name} saved with {msgs.Count} warnings.");
-                    return new JObject { ["status"] = "Success", ["messages"] = msgs }.ToString();
-                }
-
-                Logger.Info($"Object {obj.Name} saved successfully.");
-                return "{\"status\": \"Success\"}";
             }
             catch (Exception ex)
             {
-                Logger.Error($"WriteObject Fatal Error on {target}: {ex.Message}");
-                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                Logger.Error("[DEBUG-SAVE] OUTER EXCEPTION: " + ex.ToString());
+                return "{\"error\": \"" + ex.Message + "\"}";
             }
         }
 
         private Guid MapLogicalPartToGuid(string objType, string logicalPart)
         {
-            string lp = logicalPart.ToLower();
-            if (lp == "source" || lp == "code")
+            string p = logicalPart.ToLower();
+            
+            // GUIDs Oficiais GeneXus 18
+            if (objType.Equals("Procedure", StringComparison.OrdinalIgnoreCase))
             {
-                if (objType == "Procedure") return PART_PROCEDURE;
-                return PART_EVENTS;
+                if (p == "source" || p == "code") return Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f");
+                if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
+                if (p == "help") return Guid.Parse("017ea008-6202-4468-a400-3f412c938473");
             }
-            if (lp == "rules") return PART_RULES;
-            if (lp == "events") return PART_EVENTS;
-            if (lp == "variables") return PART_VARIABLES;
-            if (lp == "webform" || lp == "form" || lp == "layout") return PART_WEB_FORM;
-            return PART_PROCEDURE;
-        }
+            
+            if (objType.Equals("WebPanel", StringComparison.OrdinalIgnoreCase) || objType.Equals("Transaction", StringComparison.OrdinalIgnoreCase))
+            {
+                // Em WebPanels e Transactions, 'Source' lógico mapeia para 'Events' do SDK
+                if (p == "events" || p == "source" || p == "code") return Guid.Parse("c44bd5ff-f918-415b-98e6-aca44fed84fa");
+                if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
+            }
 
-        public string WriteSection(string target, string partName, string sectionName, string code)
-        {
-            return "{\"status\": \"Not implemented yet\"}";
+            if (objType.Equals("Transaction", StringComparison.OrdinalIgnoreCase))
+            {
+                if (p == "structure") return Guid.Parse("1608677c-a7a2-4a00-8809-6d2466085a5a");
+            }
+
+            return ObjectService.GetPartGuid(p);
         }
     }
 }

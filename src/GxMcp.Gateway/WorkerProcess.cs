@@ -10,6 +10,7 @@ namespace GxMcp.Gateway
     {
         private Process? _process;
         private readonly Configuration _config;
+        private readonly SemaphoreSlim _streamLock = new SemaphoreSlim(1, 1);
 
         public event Action<string>? OnRpcResponse;
 
@@ -69,14 +70,28 @@ namespace GxMcp.Gateway
                         OnRpcResponse?.Invoke(e.Data);
                     }
                     else 
+                    {
                         Program.Log($"[Worker StdOut] {e.Data}");
+                        Console.Error.WriteLine($"[Worker] {e.Data}");
+                    }
                 }
             };
             
             _process.ErrorDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                   Program.Log($"[Worker StdErr] {e.Data}");
+                   Program.Log($"[Worker Raw] {e.Data}");
+                   
+                   // Clean output: if it has any level tag, print as is
+                   if (e.Data.Contains("[Worker Log]") || e.Data.Contains("[INFO]") || e.Data.Contains("[DEBUG]") || e.Data.Contains("[WARN]") || e.Data.Contains("[ERROR]"))
+                   {
+                       Console.Error.WriteLine(e.Data);
+                   }
+                   else 
+                   {
+                       // This is a real system stderr (e.g. from the runtime)
+                       Console.Error.WriteLine($"[Worker System] {e.Data}");
+                   }
                 }
             };
 
@@ -94,7 +109,8 @@ namespace GxMcp.Gateway
                 Console.Error.WriteLine("[Gateway] Worker not running. Starting...");
                 Start();
             }
-            
+
+            await _streamLock.WaitAsync();
             try 
             {
                 await _process.StandardInput.WriteLineAsync(jsonRpc);
@@ -120,6 +136,10 @@ namespace GxMcp.Gateway
                     Console.Error.WriteLine($"[Gateway] Retry failed: {retryEx.Message}");
                     throw; // Give up
                 }
+            }
+            finally
+            {
+                _streamLock.Release();
             }
         }
 

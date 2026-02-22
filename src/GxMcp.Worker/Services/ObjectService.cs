@@ -35,6 +35,8 @@ namespace GxMcp.Worker.Services
         {
             var sw = Stopwatch.StartNew();
             var kb = _kbService.GetKB();
+            if (kb == null) return null;
+
             string typePart = null;
             string namePart = target;
 
@@ -70,9 +72,17 @@ namespace GxMcp.Worker.Services
                 });
             }
 
+            string parentName = null;
+            string moduleName = null;
+
+            try { parentName = obj.Parent?.Name; } catch { }
+            try { moduleName = obj.Module?.Name; } catch { }
+
             return new JObject { 
                 ["name"] = obj.Name, 
                 ["type"] = obj.TypeDescriptor.Name,
+                ["parent"] = parentName,
+                ["module"] = moduleName,
                 ["parts"] = parts
             }.ToString();
         }
@@ -93,12 +103,32 @@ namespace GxMcp.Worker.Services
                     if (p.Type == partGuid) { part = p; break; }
                 }
 
-                if (part == null) return "{\"error\": \"Part '" + partName + "' not found.\"}";
+                // Dynamic Discovery Fallback: if part not found by GUID, try to find by type
+                if (part == null)
+                {
+                    if (partName.Equals("Source", StringComparison.OrdinalIgnoreCase) || partName.Equals("Code", StringComparison.OrdinalIgnoreCase))
+                        part = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p is ISource);
+                    else if (partName.Equals("Variables", StringComparison.OrdinalIgnoreCase))
+                        part = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p is global::Artech.Genexus.Common.Parts.VariablesPart);
+                }
+
+                if (part == null) return "{\"error\": \"Part '" + partName + "' not found in " + obj.TypeDescriptor.Name + ". Available parts: " + string.Join(", ", obj.Parts.Cast<KBObjectPart>().Select(p => p.Type.ToString())) + "\"}";
 
                 JObject result = new JObject();
-                if (part is ISource)
+                
+                // Handle Variables Part specially
+                if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
                 {
-                    ISource sourcePart = (ISource)part;
+                    var sb = new System.Text.StringBuilder();
+                    foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
+                    {
+                        sb.AppendLine(string.Format("&{0} : {1}({2}{3})", v.Name, v.Type, v.Length, v.Decimals > 0 ? "," + v.Decimals : ""));
+                    }
+                    result["source"] = sb.ToString();
+                    Logger.Info("ReadSource (Variables as Text) SUCCESS");
+                }
+                else if (part is ISource sourcePart)
+                {
                     string content = sourcePart.Source;
                     
                     if (offset.HasValue || limit.HasValue)
@@ -132,9 +162,6 @@ namespace GxMcp.Worker.Services
                     result["xml"] = part.SerializeToXml();
                 }
 
-                if (_dataInsightService != null) result["dataContext"] = JObject.Parse(_dataInsightService.GetDataContext(target));
-                if (_uiService != null) result["uiContext"] = JObject.Parse(_uiService.GetUIContext(target));
-
                 return result.ToString();
             }
             catch (Exception ex)
@@ -148,7 +175,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 var variables = new JArray();
-                VariablesPart varPart = obj.Parts.Get<VariablesPart>();
+                global::Artech.Genexus.Common.Parts.VariablesPart varPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.VariablesPart>();
                 if (varPart == null) return;
 
                 foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
@@ -173,9 +200,10 @@ namespace GxMcp.Worker.Services
             if (string.IsNullOrEmpty(name)) return Guid.Empty;
             switch (name.ToLower())
             {
-                case "source": return Guid.Parse("00000000-0000-0000-0000-000000000001");
-                case "rules": return Guid.Parse("00000000-0000-0000-0000-000000000002");
-                case "events": return Guid.Parse("00000000-0000-0000-0000-000000000003");
+                case "source": return Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f");
+                case "rules": return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                case "events": return Guid.Parse("c44bd5ff-f918-415b-98e6-aca44fed84fa");
+                case "variables": return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
                 default: return Guid.Empty;
             }
         }
@@ -183,18 +211,30 @@ namespace GxMcp.Worker.Services
         private Guid MapLogicalPartToGuid(string objType, string partName)
         {
             string p = partName.ToLower();
+            
+            // GUIDs Oficiais GeneXus 18
             if (objType.Equals("Procedure", StringComparison.OrdinalIgnoreCase))
             {
-                if (p == "source") return Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f");
-                if (p == "rules") return Guid.Parse("00000000-0000-0000-0000-000000000002");
+                if (p == "source" || p == "code") return Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f");
+                if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
+                if (p == "help") return Guid.Parse("017ea008-6202-4468-a400-3f412c938473");
             }
+            
+            if (objType.Equals("WebPanel", StringComparison.OrdinalIgnoreCase) || objType.Equals("Transaction", StringComparison.OrdinalIgnoreCase))
+            {
+                // Em WebPanels e Transactions, 'Source' lógico mapeia para 'Events' do SDK
+                if (p == "events" || p == "source" || p == "code") return Guid.Parse("c44bd5ff-f918-415b-98e6-aca44fed84fa");
+                if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
+            }
+
             if (objType.Equals("Transaction", StringComparison.OrdinalIgnoreCase))
             {
-                if (p == "structure") return Guid.Parse("00000000-0000-0000-0000-000000000001");
-                if (p == "rules") return Guid.Parse("00000000-0000-0000-0000-000000000002");
-                if (p == "events") return Guid.Parse("00000000-0000-0000-0000-000000000003");
+                if (p == "structure") return Guid.Parse("1608677c-a7a2-4a00-8809-6d2466085a5a");
             }
-            return GetPartGuid(partName);
+
+            return GetPartGuid(p);
         }
     }
 }

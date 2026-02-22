@@ -1,0 +1,150 @@
+{
+  "name": "nexus-ide",
+  "displayName": "Nexus IDE (GeneXus)",
+  "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onFileSystem:genexus",
+    "onView:genexusExplorer",
+    "onLanguage:genexus",
+    "workspaceContains:**/*.gx"
+  ],
+  "enabledApiProposals": [
+    "fileSearchProvider"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "genexus",
+          "title": "GeneXus",
+          "icon": "$(database)"
+        }
+      ]
+    },
+    "views": {
+      "genexus": [
+        {
+          "id": "genexusExplorer",
+          "name": "KB Explorer",
+          "icon": "$(file-submodule)"
+        }
+      ]
+    },
+    "languages": [{
+      "id": "genexus",
+      "aliases": ["GeneXus", "gx"],
+      "extensions": [".gx"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "genexus",
+      "scopeName": "source.gx",
+      "path": "./syntaxes/genexus.tmLanguage.json"
+    }],
+    "iconThemes": [
+      {
+        "id": "genexus-icons",
+        "label": "GeneXus Icons",
+        "path": "./genexus-icons.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nexus-ide.openKb",
+        "title": "GeneXus: Open KB",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.indexKb",
+        "title": "GeneXus: Index KB",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.refreshTree",
+        "title": "GeneXus: Refresh Tree",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.forceSave",
+        "title": "GeneXus: Force Save (Ignore Bloqueios)",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.switchPart.Source",
+        "title": "Source"
+      },
+      {
+        "command": "nexus-ide.switchPart.Rules",
+        "title": "Rules"
+      },
+      {
+        "command": "nexus-ide.switchPart.Variables",
+        "title": "Variables"
+      },
+      {
+        "command": "nexus-ide.switchPart.Events",
+        "title": "Events"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "nexus-ide.openKb",
+          "when": "view == genexusExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus-ide.refreshTree",
+          "when": "view == genexusExplorer",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "nexus-ide.switchPart.Source",
+          "group": "navigation@1",
+          "when": "resourceScheme == genexus"
+        },
+        {
+          "command": "nexus-ide.switchPart.Rules",
+          "group": "navigation@2",
+          "when": "resourceScheme == genexus"
+        },
+        {
+          "command": "nexus-ide.switchPart.Events",
+          "group": "navigation@3",
+          "when": "resourceScheme == genexus && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\//"
+        },
+        {
+          "command": "nexus-ide.switchPart.Variables",
+          "group": "navigation@4",
+          "when": "resourceScheme == genexus"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.2"
+  }
+}

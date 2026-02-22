@@ -41,6 +41,17 @@ namespace GxMcp.Worker.Services
                 
                 string gxPath = Environment.GetEnvironmentVariable("GX_PROGRAM_DIR") ?? @"C:\Program Files (x86)\GeneXus\GeneXus18";
                 try {
+                    // SECURE SDK INITIALIZATION (via Reflection to be version-agnostic)
+                    try {
+                        var asm = Assembly.Load("Artech.Architecture.Common");
+                        var type = asm.GetType("Artech.Architecture.Common.Services.KnowledgeBaseService");
+                        if (type != null) {
+                            var prop = type.GetProperty("Current", BindingFlags.Public | BindingFlags.Static);
+                            var val = prop?.GetValue(null);
+                            Logger.Debug("SDK KnowledgeBaseService triggered.");
+                        }
+                    } catch (Exception ex) { Logger.Debug("SDK Trigger skipped: " + ex.Message); }
+
                     string kbPath = _buildService.GetKBPath();
                     if (kbPath.EndsWith(".gxw", StringComparison.OrdinalIgnoreCase)) kbPath = Path.GetDirectoryName(kbPath);
 
@@ -98,55 +109,91 @@ namespace GxMcp.Worker.Services
                 int processed = 0;
 
                 System.Threading.Tasks.Parallel.ForEach(objects, (obj) => {
-                    var entry = new SearchIndex.IndexEntry {
-                        Name = obj.Name,
-                        Type = obj.TypeDescriptor.Name,
-                        Description = obj.Description
-                    };
+                    try {
+                        string parentName = null;
+                        string moduleName = null;
+                        try {
+                            if (obj.Parent != null && obj.Parent.Guid != obj.Guid)
+                            {
+                                // Root children usually have the DesignModel as Parent in SDK
+                                if (obj.Parent.TypeDescriptor.Name == "DesignModel")
+                                    parentName = "Root Module";
+                                else if (obj.Parent is global::Artech.Architecture.Common.Objects.Module || obj.Parent is global::Artech.Architecture.Common.Objects.Folder)
+                                    parentName = obj.Parent.Name;
+                                // Else, if the parent is neither DesignModel, Module nor Folder, it might be an internal object or part of another object,
+                                // in which case, we probably don't want to show it as a "parent" for hierarchical browsing.
+                            }
+                        } catch { }
+                        try {
+                            if (obj.Module != null && obj.Module.Guid != obj.Guid)
+                                moduleName = obj.Module.Name;
+                        } catch { }
+                        // For Folder objects: GeneXus SDK may return DesignModel as Parent even when
+                        // the folder is visually nested inside a Module. Use obj.Module as the
+                        // organizational parent to correctly place the folder in the hierarchy.
+                        try {
+                            if (obj is global::Artech.Architecture.Common.Objects.Folder
+                                && (parentName == "Root Module" || parentName == null)
+                                && !string.IsNullOrEmpty(moduleName))
+                            {
+                                parentName = moduleName;
+                            }
+                        } catch { }
 
-                    // ENRICHMENT: Attributes metadata for Smart Injection
-                    if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)
-                    {
-                        entry.DataType = attr.Type.ToString();
-                        entry.Length = attr.Length;
-                        entry.Decimals = attr.Decimals;
-                    }
+                        var entry = new SearchIndex.IndexEntry {
+                            Name = obj.Name,
+                            Type = obj.TypeDescriptor.Name,
+                            Description = obj.Description,
+                            Parent = parentName,
+                            Module = moduleName
+                        };
 
-                    // ENRICHMENT: Tables root info
-                    if (obj is global::Artech.Genexus.Common.Objects.Table tbl)
-                    {
-                        entry.RootTable = tbl.Name;
-                    }
-
-                    // BUSINESS DOMAIN: Basic inference
-                    if (obj.Name.Contains("_"))
-                    {
-                        entry.BusinessDomain = obj.Name.Split('_')[0];
-                    }
-
-                    // ENRICHMENT: Parm and Snippet
-                    if (obj is Procedure || obj is WebPanel)
-                    {
-                        var rules = obj.Parts.Get<global::Artech.Genexus.Common.Parts.RulesPart>();
-                        if (rules != null)
+                        // ENRICHMENT: Attributes metadata for Smart Injection
+                        if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)
                         {
-                            var parmMatch = System.Text.RegularExpressions.Regex.Match(rules.Source, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
-                            if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
+                            entry.DataType = attr.Type.ToString();
+                            entry.Length = attr.Length;
+                            entry.Decimals = attr.Decimals;
                         }
 
-                        var source = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>();
-                        if (source != null && !string.IsNullOrEmpty(source.Source))
+                        // ENRICHMENT: Tables root info
+                        if (obj is global::Artech.Genexus.Common.Objects.Table tbl)
                         {
-                            var lines = source.Source.Split('\n');
-                            entry.SourceSnippet = string.Join("\n", lines.Take(5)).Trim();
+                            entry.RootTable = tbl.Name;
                         }
-                    }
 
-                    concurrentDict.TryAdd(string.Format("{0}:{1}", entry.Type, entry.Name), entry);
-                    
-                    var current = System.Threading.Interlocked.Increment(ref processed);
-                    if (current % 1000 == 0) {
-                        Logger.Info(string.Format("Progress: {0}/{1} objects indexed...", current, total));
+                        // BUSINESS DOMAIN: Basic inference
+                        if (obj.Name.Contains("_"))
+                        {
+                            entry.BusinessDomain = obj.Name.Split('_')[0];
+                        }
+
+                        // ENRICHMENT: Parm and Snippet
+                        if (obj is Procedure || obj is WebPanel)
+                        {
+                            var rules = obj.Parts.Get<global::Artech.Genexus.Common.Parts.RulesPart>();
+                            if (rules != null)
+                            {
+                                var parmMatch = System.Text.RegularExpressions.Regex.Match(rules.Source, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
+                                if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
+                            }
+
+                            var source = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>();
+                            if (source != null && !string.IsNullOrEmpty(source.Source))
+                            {
+                                var lines = source.Source.Split('\n');
+                                entry.SourceSnippet = string.Join("\n", lines.Take(5)).Trim();
+                            }
+                        }
+
+                        concurrentDict.TryAdd(string.Format("{0}:{1}", entry.Type, entry.Name), entry);
+                        
+                        var current = System.Threading.Interlocked.Increment(ref processed);
+                        if (current % 1000 == 0) {
+                            Logger.Info(string.Format("Progress: {0}/{1} objects indexed...", current, total));
+                        }
+                    } catch {
+                        // Logger.Debug(string.Format("Error indexing object {0}: {1}", obj.Name, ex.Message));
                     }
                 });
 

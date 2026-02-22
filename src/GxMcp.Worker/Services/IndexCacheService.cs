@@ -60,10 +60,26 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private void BuildParentIndex(SearchIndex index)
+        {
+            var byParent = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in index.Objects.Values)
+            {
+                string parent = entry.Parent ?? "";
+                if (!byParent.TryGetValue(parent, out var list))
+                {
+                    list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
+                    byParent[parent] = list;
+                }
+                list.Add(entry);
+            }
+            index.ChildrenByParent = byParent;
+        }
+
         public SearchIndex GetIndex()
         {
-            EnsureInitialized();
             if (_index != null) return _index;
+            EnsureInitialized();
 
             lock (_lock)
             {
@@ -72,8 +88,10 @@ namespace GxMcp.Worker.Services
                 {
                     if (File.Exists(_indexPath))
                     {
+                        Logger.Debug(string.Format("Loading index from disk: {0}", _indexPath));
                         string json = File.ReadAllText(_indexPath);
                         _index = SearchIndex.FromJson(json);
+                        BuildParentIndex(_index);
                         Logger.Info(string.Format("Index loaded. Objects: {0}", _index.Objects.Count));
                     }
                 }
@@ -86,6 +104,7 @@ namespace GxMcp.Worker.Services
 
         public void UpdateIndex(SearchIndex index)
         {
+            BuildParentIndex(index);
             _index = index;
             // Fire and forget save to disk
             Task.Run(() => FlushToDisk());

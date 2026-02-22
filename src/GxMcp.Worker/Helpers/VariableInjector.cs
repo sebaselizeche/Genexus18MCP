@@ -100,6 +100,46 @@ namespace GxMcp.Worker.Helpers
             return v;
         }
 
+        public static void SetVariablesFromText(VariablesPart part, string text)
+        {
+            var lines = text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+            var seenVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var line in lines)
+            {
+                // Format: &Name : Type(Length,Decimals)
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"&?(\w+)\s*:\s*(\w+)(?:\((\d+)(?:,(\d+))?\))?");
+                if (match.Success)
+                {
+                    string name = match.Groups[1].Value;
+                    string typeStr = match.Groups[2].Value;
+                    int length = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
+                    int decimals = match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 0;
+
+                    seenVars.Add(name);
+
+                    var v = part.Variables.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (v == null)
+                    {
+                        v = new global::Artech.Genexus.Common.Variable(part);
+                        v.Name = name;
+                        part.Variables.Add(v);
+                    }
+
+                    // Map string type to eDBType
+                    if (Enum.TryParse<global::Artech.Genexus.Common.eDBType>(typeStr, true, out var dbType))
+                    {
+                        v.Type = dbType;
+                        v.Length = length;
+                        v.Decimals = decimals;
+                    }
+                }
+            }
+
+            // Optional: Remove variables not in the text?
+            // For safety in this MVP, let's not remove variables, only add/update.
+        }
+
         private static global::Artech.Genexus.Common.Objects.Attribute FindAttribute(global::Artech.Architecture.Common.Objects.KBModel model, string name)
         {
             try

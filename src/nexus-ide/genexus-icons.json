@@ -1,0 +1,14 @@
+{
+    "iconDefinitions": {
+        "procedure": { "iconPath": "./resources/procedure.svg" },
+        "transaction": { "iconPath": "./resources/transaction.svg" },
+        "webpanel": { "iconPath": "./resources/webpanel.svg" }
+    },
+    "file": "procedure",
+    "languageIds": {
+        "genexus": "procedure"
+    },
+    "fileExtensions": {
+        "gx": "procedure"
+    }
+}

@@ -19,6 +19,18 @@ A high-performance **Model Context Protocol (MCP)** server for GeneXus 18, enabl
 
 ---
 
+## [IDE] Nexus-IDE (Mini GeneXus IDE for VS Code)
+
+The project now includes **Nexus-IDE**, a lightweight VS Code extension that transforms VS Code into a mini GeneXus IDE by leveraging the MCP server.
+
+- **Virtual File System**: Edit GeneXus objects directly in VS Code using the `genexus://` protocol.
+- **KB Explorer**: Browse your Knowledge Base hierarchy (Folders, Modules, Objects) directly from the Activity Bar.
+- **Multi-Part Editing**: Seamlessly switch between **Source**, **Rules**, **Events**, and **Variables** using dedicated editor actions.
+- **Real-time Indexing**: Powered by the same high-performance engine as the MCP server for instant search and navigation.
+- **Deep Integration**: Built-in support for Symbols, Search (Ctrl+P), and high-fidelity GeneXus icons.
+
+---
+
 ## [Setup] Installation & Setup
 
 ### Prerequisites

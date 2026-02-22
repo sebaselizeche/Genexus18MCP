@@ -17,6 +17,12 @@ The MCP now operates with extreme performance optimizations:
 2.  **Enriched Results**: Search results now include the **Parm Rule** and a **Code Snippet**, saving multiple "Read" calls.
 3.  **Impact Analysis**: Use `genexus_search(query="usedby:TableName")` to find every object referencing a specific table or attribute.
 
+## 🛠️ Integrated Experience: Nexus-IDE (VS Code)
+The project includes a mini IDE for VS Code (**Nexus-IDE**) that complements the MCP:
+1.  **Direct Editing**: The agent can assume the user is using Nexus-IDE for visual inspection.
+2.  **Part Switching**: Nexus-IDE uses the same "Parts" logic as the MCP (`Source`, `Rules`, `Events`, `Variables`).
+3.  **Virtual FS**: Files are accessed via `genexus:/[Type]/[Name]` in VS Code, powered by the same Gateway.
+
 ## [Tools] Elite Tool Usage Guide
 
 ### 1. `genexus_patch` (Surgical Edit) - **PREFER THIS**

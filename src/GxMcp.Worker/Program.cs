@@ -74,76 +74,39 @@ namespace GxMcp.Worker
                 Logger.Debug($"Setting current directory to {gxPath}");
                 Directory.SetCurrentDirectory(gxPath);
                 
+                // 1. Initialize UI Services (Bridge mode)
+                var uiAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.UI.Framework.dll"));
+                var uiType = uiAsm.GetType("Artech.Architecture.UI.Framework.Services.UIServices");
+                uiType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("UIServices Initialized.");
+
+                // 2. Initialize KB Model Objects (Critical)
+                var commonAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Genexus.Common.dll"));
+                var initType = commonAsm.GetType("Artech.Genexus.Common.KBModelObjectsInitializer");
+                initType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("KBModelObjects Initialized.");
+
+                // 3. Initialize Connector and Factory
                 Logger.Debug("Loading Connector.dll...");
                 var connAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Connector.dll"));
                 var connType = connAsm.GetType("Artech.Core.Connector");
-                Logger.Debug("Initializing Connector...");
-                connType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
-                Logger.Debug("Starting Connector...");
-                connType.GetMethod("Start", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
-
-                Logger.Debug("Loading UI Framework...");
-                var uiAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.UI.Framework.dll"));
-                var uiType = uiAsm.GetType("Artech.Architecture.UI.Framework.Services.UIServices");
-                if (uiType != null)
-                {
-                    var setDisableMethod = uiType.GetMethod("SetDisableUI", BindingFlags.Public | BindingFlags.Static);
-                    if (setDisableMethod != null)
-                    {
-                        Logger.Debug("Disabling UI...");
-                        setDisableMethod.Invoke(null, new object[] { true });
-                    }
-                    else Logger.Warn("Method SetDisableUI not found.");
-
-                    var initUiMethod = uiType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static);
-                    if (initUiMethod != null)
-                    {
-                        Logger.Debug("Initializing UI Services...");
-                        initUiMethod.Invoke(null, null);
-                    }
-                    else Logger.Warn("Method Initialize (UI) not found.");
-                }
-                else Logger.Warn("UIServices type not found.");
-
-                Logger.Debug("Loading Genexus Common...");
-                var commonAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Genexus.Common.dll"));
-                var initType = commonAsm.GetType("Artech.Genexus.Common.KBModelObjectsInitializer");
-                if (initType != null)
-                {
-                    var initMethod = initType.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static);
-                    if (initMethod != null)
-                    {
-                        Logger.Debug("Initializing KBModelObjects...");
-                        initMethod.Invoke(null, null);
-                    }
-                    else Logger.Warn("Method Initialize (KBModelObjects) not found.");
-                }
-                else Logger.Warn("KBModelObjectsInitializer type not found.");
-
-                Logger.Debug("Loading Architecture Common...");
-                var kbAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.Common.dll"));
-                var kbType = kbAsm.GetType("Artech.Architecture.Common.Objects.KnowledgeBase");
-                if (kbType != null)
-                {
-                    var kbFactoryProp = kbType.GetProperty("KBFactory", BindingFlags.Public | BindingFlags.Static);
-                    if (kbFactoryProp != null)
-                    {
-                        var factoryType = connAsm.GetType("Connector.KBFactory");
-                        if (factoryType != null)
-                        {
-                            Logger.Debug("Setting KBFactory...");
-                            kbFactoryProp.SetValue(null, Activator.CreateInstance(factoryType));
-                        }
-                        else Logger.Warn("Connector.KBFactory type not found.");
-                    }
-                    else Logger.Warn("Property KBFactory not found.");
-                }
-                else Logger.Warn("KnowledgeBase type not found.");
+                connType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                connType?.GetMethod("Start", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
                 
-                Logger.Info("Surgical Init Success.");
+                var archAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.Common.dll"));
+                var kbBaseType = archAsm.GetType("Artech.Architecture.Common.Objects.KnowledgeBase");
+                var factoryProp = kbBaseType?.GetProperty("KBFactory", BindingFlags.Public | BindingFlags.Static);
+                if (factoryProp != null) {
+                    var factoryType = connAsm.GetType("Connector.KBFactory");
+                    if (factoryType != null) {
+                        factoryProp.SetValue(null, Activator.CreateInstance(factoryType));
+                        Logger.Info("KBFactory Linked successfully.");
+                    }
+                }
+                
+                Logger.Info("Full SDK Initialization SUCCESS.");
             } catch (Exception ex) { 
-                Logger.Error("Init Error: " + ex.Message); 
-                if (ex.InnerException != null) Logger.Error("Inner Error: " + ex.InnerException.Message);
+                Logger.Error("CRITICAL Init Error: " + ex.Message); 
             }
         }
 
@@ -161,8 +124,6 @@ namespace GxMcp.Worker
         private static void SendResponse(string result, string id)
         {
             try {
-                // CRITICAL: Ensure result is treated as a raw JToken if it's already JSON
-                // to avoid double escaping, then serialize to ONE LINE.
                 object resultObj;
                 try { resultObj = JToken.Parse(result); }
                 catch { resultObj = result; }

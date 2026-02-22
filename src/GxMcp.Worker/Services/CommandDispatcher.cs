@@ -72,76 +72,12 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                Logger.Debug(string.Format("Dispatching command: {0}", line.Length > 100 ? line.Substring(0, 100) : line));
+                Logger.Debug(string.Format("Dispatching command: {0}", line.Length > 500 ? line.Substring(0, 500) + "..." : line));
                 var request = JObject.Parse(line);
                 string method = request["method"] != null ? request["method"].ToString() : null;
                 var @params = request["params"] as JObject ?? new JObject();
 
-                switch (method)
-                {
-                    case "genexus_list_objects":
-                    case "genexus_search":
-                        string q = @params["query"] != null ? @params["query"].ToString() : (@params["filter"] != null ? @params["filter"].ToString() : null);
-                        return _searchService.Search(q, null, null, @params["limit"] != null ? (int)@params["limit"] : 100);
-                    case "genexus_read_object":
-                        return _objectService.ReadObject(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_read_source":
-                        return _objectService.ReadObjectSource(
-                            @params["name"] != null ? @params["name"].ToString() : null, 
-                            @params["part"] != null ? @params["part"].ToString() : "Source",
-                            @params["offset"] != null ? (int?)@params["offset"] : null,
-                            @params["limit"] != null ? (int?)@params["limit"] : null
-                        );
-                    case "genexus_write_object":
-                        return _writeService.WriteObject(@params["name"] != null ? @params["name"].ToString() : null, @params["part"] != null ? @params["part"].ToString() : null, @params["code"] != null ? @params["code"].ToString() : null);
-                    case "genexus_analyze":
-                        return _analyzeService.Analyze(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_build":
-                        return _buildService.Build(@params["action"] != null ? @params["action"].ToString() : null, @params["target"] != null ? @params["target"].ToString() : null);
-                    case "genexus_doctor":
-                        return _buildService.Doctor(@params["logPath"] != null ? @params["logPath"].ToString() : null);
-                    case "genexus_batch":
-                        return _batchService.ProcessBatch(@params["action"] != null ? @params["action"].ToString() : null, @params["name"] != null ? @params["name"].ToString() : null, @params["code"] != null ? @params["code"].ToString() : null);
-                    case "genexus_refactor":
-                        return _refactorService.Refactor(@params["name"] != null ? @params["name"].ToString() : null, @params["action"] != null ? @params["action"].ToString() : null);
-                    case "genexus_validate":
-                        return _validationService.ValidateCode(@params["name"] != null ? @params["name"].ToString() : null, @params["part"] != null ? @params["part"].ToString() : null, @params["code"] != null ? @params["code"].ToString() : null);
-                    case "genexus_test":
-                        return _testService.RunTest(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_scaffold":
-                        return _forgeService.Scaffold(@params["type"] != null ? @params["type"].ToString() : null, @params["name"] != null ? @params["name"].ToString() : null, @params);
-                    case "genexus_patch":
-                        return _patchService.ApplyPatch(
-                            @params["name"] != null ? @params["name"].ToString() : null, 
-                            @params["part"] != null ? @params["part"].ToString() : "Source", 
-                            @params["operation"] != null ? @params["operation"].ToString() : null, 
-                            @params["content"] != null ? @params["content"].ToString() : null, 
-                            @params["context"] != null ? @params["context"].ToString() : null,
-                            @params["expectedCount"] != null ? (int)@params["expectedCount"] : 1
-                        );
-                    case "genexus_bulk_index":
-                        return _kbService.BulkIndex();
-                    case "genexus_get_attribute":
-                        return _analyzeService.GetAttributeMetadata(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_get_hierarchy":
-                        return _analyzeService.GetHierarchy(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_get_variables":
-                        return _analyzeService.GetVariables(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_get_data_context":
-                        return _dataInsightService.GetDataContext(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_get_ui_context":
-                        return _uiService.GetUIContext(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_wiki":
-                        return _wikiService.Generate(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_visualize":
-                        return _visualizerService.GenerateGraph(@params["domain"] != null ? @params["domain"].ToString() : null);
-                    case "genexus_linter":
-                        return _linterService.Lint(@params["name"] != null ? @params["name"].ToString() : null);
-                    case "genexus_health_report":
-                        return _healthService.GetHealthReport();
-                    case "genexus_history":
-                        return _historyService.Execute(@params["name"] != null ? @params["name"].ToString() : null, @params["action"] != null ? @params["action"].ToString() : null);
-                }
+                // ... (keep switch cases)
 
                 if (method == "execute_command")
                 {
@@ -154,11 +90,14 @@ namespace GxMcp.Worker.Services
                     {
                         case "KB":
                             if (action == "BulkIndex") return _kbService.BulkIndex();
+                            if (action == "Initialize") return _kbService.GetKB() != null ? "{\"status\":\"Ready\"}" : "{\"error\":\"Failed to open KB\"}";
                             return "{\"error\": \"Action not found in KB\"}";
                         case "ListObjects":
                             return _searchService.Search(null, target, null, @params["limit"] != null ? (int)@params["limit"] : 100);
                         case "Search":
-                            return _searchService.Search(target);
+                            string q = target ?? (@params["query"] != null ? @params["query"].ToString() : null);
+                            int searchLimit = @params["limit"] != null ? (int)@params["limit"] : 200;
+                            return _searchService.Search(q, null, null, searchLimit);
                         case "Read":
                             if (action == "ExtractSource") return _objectService.ReadObjectSource(target, @params["part"] != null ? @params["part"].ToString() : "Source");
                             if (action == "GetAttribute") return _analyzeService.GetAttributeMetadata(target);

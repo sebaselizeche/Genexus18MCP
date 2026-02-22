@@ -20,3 +20,9 @@ cache/
 *.suo
 *.user
 *.userprefs
+
+# --- Node.js / VS Code Extension ---
+node_modules/
+out/
+.vscode-test/
+*.vsix

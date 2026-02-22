@@ -9,11 +9,16 @@ namespace GxMcp.Worker.Models
         public Dictionary<string, IndexEntry> Objects { get; set; } = new Dictionary<string, IndexEntry>(StringComparer.OrdinalIgnoreCase);
         public DateTime LastUpdated { get; set; }
 
+        [JsonIgnore]
+        public Dictionary<string, List<IndexEntry>> ChildrenByParent { get; set; }
+
         public class IndexEntry
         {
             public string Name { get; set; }
             public string Type { get; set; }
             public string Description { get; set; }
+            public string Parent { get; set; }
+            public string Module { get; set; }
             public List<string> Tags { get; set; } = new List<string>();
             public List<string> Keywords { get; set; } = new List<string>();
             
