@@ -1,8 +1,16 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Linq;
 using GxMcp.Worker.Helpers;
+using Artech.Architecture.Common.Objects;
+using Artech.Genexus.Common.Objects;
+using Artech.Genexus.Common.Services;
+using Artech.Architecture.Common.Services;
+using Artech.Udm.Framework;
 
 namespace GxMcp.Worker.Services
 {
@@ -14,89 +22,95 @@ namespace GxMcp.Worker.Services
 
         public BuildService()
         {
-            _gxDir = @"C:\Program Files (x86)\GeneXus\GeneXus18";
+            _gxDir = Environment.GetEnvironmentVariable("GX_PROGRAM_DIR") ?? @"C:\Program Files (x86)\GeneXus\GeneXus18";
             
             string[] searchPaths = new[] {
-                Path.Combine(_gxDir, "MSBuild.exe"),
-                @"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe",
                 @"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
-                @"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\Bin\MSBuild.exe",
+                @"C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe",
+                Path.Combine(_gxDir, "MSBuild.exe"),
                 @"C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe"
             };
 
-            foreach (var p in searchPaths)
-            {
-                if (File.Exists(p))
-                {
-                    _msbuildPath = p;
-                    break;
-                }
-            }
-
-            if (string.IsNullOrEmpty(_msbuildPath))
-            {
-                _msbuildPath = @"C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe";
-            }
+            foreach (var p in searchPaths) { if (File.Exists(p)) { _msbuildPath = p; break; } }
         }
 
-        public void SetKbService(KbService kbService)
-        {
-            _kbService = kbService;
-        }
+        public void SetKbService(KbService kbService) { _kbService = kbService; }
 
         public string Build(string action, string target)
         {
-            return Execute(action, target);
+            try
+            {
+                var kb = _kbService.GetKB();
+                if (kb != null && action.Equals("Build", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Info("Attempting Native SDK Build for: " + target);
+                    IBuildService buildService = null;
+                    try {
+                        var model = kb.DesignModel.Environment.TargetModel;
+                        var method = model.GetType().GetMethod("GetService", new Type[] { typeof(Type) });
+                        if (method != null) buildService = method.Invoke(model, new object[] { typeof(IBuildService) }) as IBuildService;
+                    } catch { }
+
+                    if (buildService != null)
+                    {
+                        KBObject obj = kb.DesignModel.Objects.Get(null, new QualifiedName(target));
+                        if (obj != null)
+                        {
+                            buildService.BuildWithTheseOnly(new List<EntityKey> { obj.Key });
+                            return "{\"status\": \"Success\", \"message\": \"Native Build triggered for " + target + "\"}";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.Warn("Native Build failed: " + ex.Message); }
+
+            return BuildWithMSBuild(action, target);
         }
 
-        public string Doctor(string logPath)
+        private string BuildWithMSBuild(string action, string target)
         {
-            return "{\"status\": \"Doctor not implemented\"}";
-        }
+            try
+            {
+                string kbPath = GetKBPath();
+                if (string.IsNullOrEmpty(kbPath)) return "{\"error\": \"KB Path not found in Environment (GX_KB_PATH)\"}";
 
-        public string Execute(string action, string target)
-        {
-            // Simplified for now but needs implementation if build is needed
-            return "{\"status\": \"Build action '" + action + "' accepted but execution via MSBuild is currently being restored\"}";
+                string tempFile = Path.Combine(Path.GetTempPath(), "GxBuild_" + Guid.NewGuid().ToString().Substring(0,8) + ".msbuild");
+                var sb = new StringBuilder();
+                sb.AppendLine("<Project DefaultTargets=\"Execute\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">");
+                sb.AppendLine("  <Import Project=\"" + Path.Combine(_gxDir, "Genexus.Tasks.targets") + "\" />");
+                sb.AppendLine("  <Target Name=\"Execute\">");
+                sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPath + "\" />");
+                if (action.Equals("Build", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(target))
+                    sb.AppendLine("    <BuildOne BuildCalled=\"true\" ObjectName=\"" + target + "\" />");
+                else if (action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase))
+                    sb.AppendLine("    <RebuildAll />");
+                else sb.AppendLine("    <BuildAll />");
+                sb.AppendLine("    <CloseKnowledgeBase />");
+                sb.AppendLine("  </Target></Project>");
+                
+                File.WriteAllText(tempFile, sb.ToString());
+
+                var startInfo = new ProcessStartInfo {
+                    FileName = _msbuildPath,
+                    Arguments = "/nologo /v:m /target:Execute \"" + tempFile + "\"",
+                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
+                    CreateNoWindow = true, WorkingDirectory = _gxDir
+                };
+
+                using (var process = Process.Start(startInfo)) {
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+                    try { File.Delete(tempFile); } catch { }
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { status = process.ExitCode == 0 ? "Success" : "Error", output = output });
+                }
+            }
+            catch (Exception ex) { return "{\"status\": \"Error\", \"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
         }
 
         public string GetKBPath()
         {
-            try 
-            {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string[] candidates = new[] {
-                    Path.Combine(baseDir, "config.json"),
-                    Path.GetFullPath(Path.Combine(baseDir, @"..\config.json")),
-                    Path.GetFullPath(Path.Combine(baseDir, @"..\..\config.json")),
-                    Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\..\config.json"))
-                };
-
-                string configPath = null;
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c))
-                    {
-                        configPath = c;
-                        break;
-                    }
-                }
-
-                if (configPath != null)
-                {
-                    var json = File.ReadAllText(configPath);
-                    var cfg = Newtonsoft.Json.Linq.JObject.Parse(json);
-                    string path = cfg["Environment"]?["KBPath"]?.ToString();
-                    
-                    if (!string.IsNullOrEmpty(path))
-                    {
-                        return path;
-                    }
-                }
-            }
-            catch { }
-            
-            return ""; 
+            // UNIVERSAL: The Gateway injects this. No file searching anymore.
+            return Environment.GetEnvironmentVariable("GX_KB_PATH") ?? "";
         }
     }
 }

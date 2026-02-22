@@ -10,6 +10,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onFileSystem:genexus",
     "onView:genexusExplorer",
     "onLanguage:genexus",
@@ -56,6 +57,20 @@
         "path": "./genexus-icons.json"
       }
     ],
+    "themes": [
+      {
+        "id": "genexus-classic",
+        "label": "GeneXus Classic",
+        "uiTheme": "vs",
+        "path": "./themes/genexus-classic.json"
+      },
+      {
+        "id": "genexus-dark",
+        "label": "GeneXus Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/genexus-dark.json"
+      }
+    ],
     "commands": [
       {
         "command": "nexus-ide.openKb",
@@ -66,6 +81,12 @@
         "command": "nexus-ide.indexKb",
         "title": "GeneXus: Index KB",
         "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.buildObject",
+        "title": "GeneXus: Build with this only",
+        "category": "GeneXus",
+        "icon": "$(play)"
       },
       {
         "command": "nexus-ide.refreshTree",
@@ -95,6 +116,27 @@
       }
     ],
     "menus": {
+      "view/item/context": [
+        {
+          "command": "nexus-ide.buildObject",
+          "when": "view == genexusExplorer && viewItem =~ /gx_(procedure|transaction|webpanel|sdpanel|dataprovider)/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "nexus-ide.buildObject",
+          "when": "resourceScheme == genexus",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "nexus-ide.buildObject",
+          "when": "resourceScheme == genexus",
+          "group": "navigation"
+        }
+      ],
       "view/title": [
         {
           "command": "nexus-ide.openKb",

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using GxMcp.Worker.Models;
 
 namespace GxMcp.Worker.Services
@@ -9,278 +10,128 @@ namespace GxMcp.Worker.Services
     public class SearchService
     {
         private readonly IndexCacheService _indexCacheService;
+        private static readonly ConcurrentDictionary<string, string> _queryCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static DateTime _lastIndexTime = DateTime.MinValue;
 
         public SearchService(IndexCacheService indexCacheService)
         {
             _indexCacheService = indexCacheService;
         }
 
-        private static readonly Dictionary<string, string[]> BusinessSynonyms = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "ptc", new[] { "protocolo" } },
-            { "protocolo", new[] { "ptc" } },
-            { "fin", new[] { "financeiro" } },
-            { "financeiro", new[] { "fin" } },
-            { "acad", new[] { "acadêmico", "academico", "estudante", "aluno" } },
-            { "wrf", new[] { "workflow", "fluxo", "etapa" } },
-            { "trn", new[] { "transação", "transacao", "transaction" } },
-            { "prc", new[] { "procedure", "processo" } },
-            { "att", new[] { "atributo", "attribute" } },
-            { "tbl", new[] { "tabela", "table" } },
-            { "dom", new[] { "domínio", "dominio" } }
-        };
-
         public string Search(string query, string typeFilter = null, string domainFilter = null, int limit = 50)
         {
             try
             {
                 var index = _indexCacheService.GetIndex();
-                if (index == null || index.Objects.Count == 0)
-                    return "{\"error\": \"Search index not found or empty. Please run 'genexus_bulk_index' first.\"}";
+                if (index == null || index.Objects.Count == 0) return "{\"error\": \"Index empty.\"}";
 
-                // HEURISTIC: If query looks like "Type:Name" (e.g. "Procedure:MyProc"), split it.
-                // Must NOT fire for filter-keyword queries (parent:, type:, domain:, etc.) or
-                // they get mis-parsed as type filters and the real filter is lost.
-                if (!string.IsNullOrEmpty(query) && query.Contains(":")
-                    && !query.StartsWith("parent:",    StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("usedby:",    StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("type:",      StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("domain:",    StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("calls:",     StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("calledby:",  StringComparison.OrdinalIgnoreCase)
-                    && !query.StartsWith("uses:",      StringComparison.OrdinalIgnoreCase))
-                {
-                    var parts = query.Split(':');
-                    if (parts.Length == 2)
-                    {
-                        typeFilter = parts[0];
-                        query = parts[1];
-                    }
-                }
+                if (index.LastUpdated > _lastIndexTime) { _queryCache.Clear(); _lastIndexTime = index.LastUpdated; }
+
+                string cacheKey = string.Format("{0}|{1}|{2}|{3}", query ?? "", typeFilter ?? "", domainFilter ?? "", limit);
+                if (_queryCache.TryGetValue(cacheKey, out var cached)) return cached;
 
                 var criteria = ParseQuery(query);
                 if (!string.IsNullOrEmpty(typeFilter)) criteria.TypeFilter = typeFilter;
                 if (!string.IsNullOrEmpty(domainFilter)) criteria.DomainFilter = domainFilter;
 
-                var results = new List<RankedResult>();
+                // PLINQ Search: Ultra fast scan of 37k+ objects
+                var queryResults = index.Objects.Values.AsParallel();
 
-                // Fast path: pure parent browse with no text terms — use pre-built index
-                if (!string.IsNullOrEmpty(criteria.ParentFilter) && criteria.Terms.Count == 0
-                    && string.IsNullOrEmpty(criteria.TypeFilter) && string.IsNullOrEmpty(criteria.DomainFilter)
-                    && (query == null || !query.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
-                    && index.ChildrenByParent != null)
-                {
-                    if (index.ChildrenByParent.TryGetValue(criteria.ParentFilter, out var children))
-                    {
-                        foreach (var entry in children)
-                        {
-                            if (string.Equals(entry.Name, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) continue;
-                            int score = (entry.Type.Equals("Folder", StringComparison.OrdinalIgnoreCase) || entry.Type.Equals("Module", StringComparison.OrdinalIgnoreCase)) ? 1000 : 1;
-                            results.Add(new RankedResult { Entry = entry, Score = score });
+                // 1. Apply Hard Filters
+                if (!string.IsNullOrEmpty(criteria.TypeFilter))
+                    queryResults = queryResults.Where(e => IsTypeMatch(e.Type, criteria.TypeFilter));
+                
+                if (!string.IsNullOrEmpty(criteria.DomainFilter))
+                    queryResults = queryResults.Where(e => string.Equals(e.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase));
+
+                if (!string.IsNullOrEmpty(criteria.ParentFilter))
+                    queryResults = queryResults.Where(e => string.Equals(e.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase));
+
+                // 2. Apply Semantic Filters (usedby:)
+                if (!string.IsNullOrEmpty(criteria.UsedByFilter))
+                    queryResults = queryResults.Where(e => e.RootTable != null && e.RootTable.Equals(criteria.UsedByFilter, StringComparison.OrdinalIgnoreCase));
+
+                // 3. Scoring and Finalizing
+                var finalResults = queryResults
+                    .Select(entry => {
+                        int score = 0;
+                        if (criteria.Terms.Count > 0) {
+                            score = CalculateFastScore(entry, criteria.Terms);
+                            if (score <= 0) return new RankedResult { Score = -1 };
+                        } else {
+                            score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1;
                         }
-                    }
-                }
-                else
-                {
-                foreach (var entry in index.Objects.Values)
-                {
-                    // 0. Impact Analysis Mode
-                    if (query != null && query.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        string target = query.Substring(7).Trim();
-                        if (entry.RootTable != null && entry.RootTable.Equals(target, StringComparison.OrdinalIgnoreCase))
-                        {
-                            results.Add(new RankedResult { Entry = entry, Score = 1000 });
-                            continue;
-                        }
-                    }
-
-                    // 1. Unified Filter: If no specific criteria, match anything
-                    bool matches = true;
-                    if (!string.IsNullOrEmpty(criteria.TypeFilter) && !IsTypeMatch(entry.Type, criteria.TypeFilter)) matches = false;
-                    if (matches && !string.IsNullOrEmpty(criteria.DomainFilter) && !string.Equals(entry.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
-                    if (matches && !string.IsNullOrEmpty(criteria.ParentFilter) && !string.Equals(entry.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
-
-                    // HEURISTIC: Prevent recursion by excluding the parent itself from its children list
-                    if (matches && !string.IsNullOrEmpty(criteria.ParentFilter) && string.Equals(entry.Name, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase)) matches = false;
-
-                    if (!matches && string.IsNullOrEmpty(query)) continue;
-
-                    // 2. Text Scoring (Soft match)
-                    int score = 0;
-                    if (criteria.Terms.Count > 0)
-                    {
-                        score = CalculateScore(entry, criteria.Terms.ToArray());
-                        if (score <= 0 && matches && string.IsNullOrEmpty(query)) score = 1;
-                        if (score <= 0) continue;
-                    }
-                    else if (matches)
-                    {
-                        score = 1;
-                        if (entry.Type.Equals("Folder", StringComparison.OrdinalIgnoreCase) ||
-                            entry.Type.Equals("Module", StringComparison.OrdinalIgnoreCase))
-                        {
-                            score = 1000; // Prioritize folders/modules in browsing
-                        }
-                    }
-                    else { continue; }
-
-                    results.Add(new RankedResult { Entry = entry, Score = score });
-                }
-                }
-
-                var finalResults = results
+                        return new RankedResult { Entry = entry, Score = score };
+                    })
+                    .Where(r => r.Score > 0)
                     .OrderByDescending(r => r.Score)
                     .ThenBy(r => r.Entry.Name)
                     .Take(limit)
-                    .Select(r => {
-                        var dict = new Dictionary<string, object>();
-                        dict["name"] = r.Entry.Name;
-                        dict["type"] = r.Entry.Type;
-                        if (r.Score > 1) dict["score"] = r.Score;
-                        if (!string.IsNullOrEmpty(r.Entry.Description)) dict["description"] = r.Entry.Description;
-                        if (r.Entry.BusinessDomain != null && r.Entry.BusinessDomain != "Geral") dict["domain"] = r.Entry.BusinessDomain;
-                        dict["connections"] = (r.Entry.Calls?.Count ?? 0) + (r.Entry.CalledBy?.Count ?? 0);
-                        if (!string.IsNullOrEmpty(r.Entry.ParmRule)) dict["parm"] = r.Entry.ParmRule;
-                        if (!string.IsNullOrEmpty(r.Entry.SourceSnippet)) dict["snippet"] = r.Entry.SourceSnippet;
-                        if (!string.IsNullOrEmpty(r.Entry.Parent)) dict["parent"] = r.Entry.Parent;
-                        if (!string.IsNullOrEmpty(r.Entry.Module)) dict["module"] = r.Entry.Module;
-                        return dict;
-                    })
                     .ToList();
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new { 
+                var json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
                     count = finalResults.Count, 
-                    results = finalResults 
+                    results = finalResults.Select(r => new {
+                        name = r.Entry.Name,
+                        type = r.Entry.Type,
+                        description = r.Entry.Description,
+                        parm = r.Entry.ParmRule,
+                        snippet = r.Entry.SourceSnippet,
+                        parent = r.Entry.Parent
+                    })
                 });
+
+                _queryCache.TryAdd(cacheKey, json);
+                return json;
             }
-            catch (Exception ex)
-            {
-                return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
-            }
+            catch (Exception ex) { return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
         }
 
-        private SearchCriteria ParseQuery(string query)
-        {
-            var criteria = new SearchCriteria();
-            if (string.IsNullOrEmpty(query)) return criteria;
-
-            // Simple heuristic for parent:"Value With Space" or parent:ValueWithNoSpace
-            if (query.Contains("parent:"))
-            {
-                int idx = query.IndexOf("parent:");
-                string rest = query.Substring(idx + 7);
-                // If it starts with quote, find ending quote
-                if (rest.StartsWith("\"")) {
-                    int end = rest.IndexOf("\"", 1);
-                    if (end > 0) {
-                        criteria.ParentFilter = rest.Substring(1, end - 1);
-                        query = query.Remove(idx, 7 + end + 1);
-                    }
-                } else {
-                    // Find next space or end of string
-                    int end = rest.IndexOf(" ");
-                    if (end > 0) {
-                        criteria.ParentFilter = rest.Substring(0, end);
-                        query = query.Remove(idx, 7 + end);
-                    } else {
-                        criteria.ParentFilter = rest;
-                        query = query.Remove(idx);
-                    }
-                }
-            }
-
-            var parts = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (var part in parts)
-            {
-                if (part.Contains(":"))
-                {
-                    var kv = part.Split(new[] { ':' }, 2);
-                    string key = kv[0].ToLower();
-                    string val = kv[1];
-
-                    switch(key) {
-                        case "type": criteria.TypeFilter = val; break;
-                        case "domain": criteria.DomainFilter = val; break;
-                        case "calls": criteria.CallsFilter = val; break;
-                        case "calledby": criteria.CalledByFilter = val; break;
-                        case "uses": criteria.UsesFilter = val; break;
-                        default: criteria.Terms.Add(part); break;
-                    }
-                }
-                else
-                {
-                    criteria.Terms.Add(part);
-                    if (BusinessSynonyms.TryGetValue(part, out var synonyms))
-                        foreach (var syn in synonyms) criteria.Terms.Add(syn);
-                }
-            }
-            return criteria;
-        }
-
-        private bool CheckCalls(SearchIndex.IndexEntry entry, string target)
-        {
-            if (entry.Calls == null) return false;
-            return entry.Calls.Any(c => c.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-        private bool CheckCalledBy(SearchIndex.IndexEntry entry, string caller)
-        {
-            if (entry.CalledBy == null) return false;
-            return entry.CalledBy.Any(c => c.IndexOf(caller, StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-        private bool CheckUses(SearchIndex.IndexEntry entry, string usage)
-        {
-            // Placeholder: Our Index currently doesn't store Attribute/Table usage separately from 'Calls'
-            // We can check Calls for now as a fallback
-            return CheckCalls(entry, usage);
-        }
-
-        private int CalculateScore(SearchIndex.IndexEntry entry, string[] terms)
+        private int CalculateFastScore(SearchIndex.IndexEntry entry, HashSet<string> terms)
         {
             int score = 0;
-            string content = $"{entry.Name} {entry.Description} {entry.BusinessDomain} {string.Join(" ", entry.Tags ?? new List<string>())}";
-            
-            foreach (var term in terms)
-            {
-                if (entry.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 500;
-                if (entry.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 200;
-                if (entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
-                if (IsTypeMatch(entry.Type, term)) score += 150;
-                if (content.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 10;
+            foreach (var term in terms) {
+                if (entry.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
+                else if (entry.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 500;
+                else if (entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
             }
-            score += (entry.CalledBy?.Count ?? 0) * 5;
             return score;
         }
 
         private bool IsTypeMatch(string type, string query)
         {
-            string t = type.ToLower();
-            string q = query.ToLower();
-            if (q == "prc" || q == "proc" || q == "procedure") return t.Contains("procedure") || t == "prc";
-            if (q == "trn" || q == "transaction") return t.Contains("transaction") || t == "trn";
-            if (q == "wp" || q == "wbp" || q == "webpanel") return t.Contains("webpanel") || t == "wbp";
-            if (q == "att" || q == "attribute") return t.Contains("attribute") || t == "att";
-            if (q == "tbl" || q == "table") return t.Contains("table") || t == "tbl";
-            return t.Contains(q) || q.Contains(t);
+            if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(query)) return false;
+            string t = type.ToLower(); string q = query.ToLower();
+            if (q == "prc" || q == "procedure") return t.Contains("procedure");
+            if (q == "trn" || q == "transaction") return t.Contains("transaction");
+            return t.Contains(q);
         }
 
-        private class RankedResult
+        private SearchCriteria ParseQuery(string query)
         {
-            public SearchIndex.IndexEntry Entry { get; set; }
-            public int Score { get; set; }
+            var c = new SearchCriteria();
+            if (string.IsNullOrEmpty(query)) return c;
+            
+            // Extract usedby:
+            if (query.Contains("usedby:")) {
+                var m = System.Text.RegularExpressions.Regex.Match(query, @"usedby:(\w+)");
+                if (m.Success) { c.UsedByFilter = m.Groups[1].Value; query = query.Replace(m.Value, ""); }
+            }
+            // Extract parent:
+            if (query.Contains("parent:")) {
+                var m = System.Text.RegularExpressions.Regex.Match(query, "parent:\"?([^\"]+)\"?");
+                if (m.Success) { c.ParentFilter = m.Groups[1].Value; query = query.Replace(m.Value, ""); }
+            }
+
+            foreach (var part in query.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries)) c.Terms.Add(part);
+            return c;
         }
 
-        private class SearchCriteria
-        {
-            public string TypeFilter { get; set; }
-            public string DomainFilter { get; set; }
-            public string CallsFilter { get; set; }
-            public string CalledByFilter { get; set; }
-            public string UsesFilter { get; set; }
-            public string ParentFilter { get; set; }
-            public HashSet<string> Terms { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } }
+        private class SearchCriteria { 
+            public string TypeFilter { get; set; } public string ParentFilter { get; set; } 
+            public string UsedByFilter { get; set; } public string DomainFilter { get; set; } 
+            public HashSet<string> Terms { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase); 
         }
     }
 }

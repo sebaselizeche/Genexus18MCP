@@ -75,15 +75,19 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
         const path = decodeURIComponent(uri.path.substring(1));
         const parentName = path === '' ? 'Root Module' : path.split('/').pop()!;
-        const cacheKey = `dir:${parentName}`;
+        const cacheKey = `dir:${path}`;
         
         const cached = this._dirCache.get(cacheKey);
         if (cached && (Date.now() - cached.time < 60000)) return cached.entries;
 
         try {
+            // IF path is one of the standard GX types (Procedure, etc.), search by TYPE instead of parent
+            const isTypeFolder = this.VALID_TYPES.has(parentName);
+            const query = isTypeFolder ? `type:${parentName}` : `parent:"${parentName}"`;
+
             const result = await this.callGateway({
                 method: "execute_command",
-                params: { module: 'Search', query: `parent:"${parentName}"`, limit: 5000 }
+                params: { module: 'Search', query: query, limit: 5000 }
             });
 
             const objects = result.results || (Array.isArray(result) ? result : []);
@@ -193,19 +197,23 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         return this._writeFile(uri, content, { create: false, overwrite: true });
     }
 
-    public async callGateway(command: any): Promise<any> {
+    public async callGateway(command: any, customTimeout?: number): Promise<any> {
         return new Promise((resolve, reject) => {
             const data = JSON.stringify(command);
+            const timeout = customTimeout || 60000; // Default to 60s
             const req = http.request(this.baseUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Content-Length': data.length },
-                timeout: 30000
+                timeout: timeout
             }, (res) => {
                 let body = '';
                 res.on('data', (chunk) => body += chunk);
                 res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve(body); } });
             });
-            req.on('timeout', () => { req.destroy(); reject(new Error("Timeout Gateway (15s)")); });
+            req.on('timeout', () => { 
+                req.destroy(); 
+                reject(new Error(`Timeout Gateway (${timeout/1000}s)`)); 
+            });
             req.on('error', reject);
             req.write(data);
             req.end();

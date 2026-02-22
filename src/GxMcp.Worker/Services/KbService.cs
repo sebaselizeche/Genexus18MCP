@@ -52,7 +52,9 @@ namespace GxMcp.Worker.Services
                         }
                     } catch (Exception ex) { Logger.Debug("SDK Trigger skipped: " + ex.Message); }
 
-                    string kbPath = _buildService.GetKBPath();
+                    string kbPath = Environment.GetEnvironmentVariable("GX_KB_PATH");
+                    if (string.IsNullOrEmpty(kbPath)) throw new Exception("GX_KB_PATH environment variable not set by Gateway");
+
                     if (kbPath.EndsWith(".gxw", StringComparison.OrdinalIgnoreCase)) kbPath = Path.GetDirectoryName(kbPath);
 
                     // Initialize the cache path based on the actual KB being opened
@@ -65,15 +67,14 @@ namespace GxMcp.Worker.Services
 
                         var options = new global::Artech.Architecture.Common.Objects.KnowledgeBase.OpenOptions(kbPath);
                         options.EnableMultiUser = true;
-                        options.AvoidIndexing = true;
+                        options.AvoidIndexing = true; // DO NOT use SDK indexing (we have our own)
                         
-                        // GX18 Hardening: Try to disable all background checks
+                        // Disable everything slow
                         try {
                             var props = options.GetType().GetProperties();
                             foreach(var p in props) {
-                                if (p.Name == "NoAutomaticUpdate" || p.Name == "OfflineMode") {
+                                if (p.Name == "NoAutomaticUpdate" || p.Name == "OfflineMode" || p.Name == "AvoidCheckingNetwork") {
                                     p.SetValue(options, true);
-                                    Logger.Debug($"Option {p.Name} set to true.");
                                 }
                             }
                         } catch { }
@@ -81,7 +82,10 @@ namespace GxMcp.Worker.Services
                         _kb = global::Artech.Architecture.Common.Objects.KnowledgeBase.Open(options);
                         if (_kb == null) throw new Exception("KnowledgeBase.Open returned null");
                         
-                        Logger.Info($"KB opened successfully. DesignModel: {_kb.DesignModel?.Name}");
+                        // Ensure minimal context is loaded
+                        if (_kb.DesignModel == null) throw new Exception("DesignModel failed to load");
+                        
+                        Logger.Info($"KB opened successfully in {System.Diagnostics.Process.GetCurrentProcess().UserProcessorTime.TotalMilliseconds}ms virtual time.");
                     } finally { Directory.SetCurrentDirectory(oldDir); }
                 } catch (Exception ex) { 
                     Logger.Error($"ERROR opening KB: {ex.Message}");

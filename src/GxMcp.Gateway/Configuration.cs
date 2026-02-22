@@ -1,58 +1,58 @@
 using System;
 using System.IO;
+using System.Reflection;
 using Newtonsoft.Json;
 
 namespace GxMcp.Gateway
 {
     public class Configuration
     {
+        [JsonProperty("GeneXus")]
         public GeneXusConfig? GeneXus { get; set; }
+
+        [JsonProperty("Server")]
         public ServerConfig? Server { get; set; }
+
+        [JsonProperty("Logging")]
         public LoggingConfig? Logging { get; set; }
+
+        [JsonProperty("Environment")]
+        public EnvironmentConfig? Environment { get; set; }
 
         public static Configuration Load()
         {
-            string configPath = "config.json";
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string deepSearch = Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\..\config.json")); // bin/Debug/net8.0/../../../../ = root
-            
-             Console.Error.WriteLine($"[Config Debug] CWD: {Directory.GetCurrentDirectory()}");
-             Console.Error.WriteLine($"[Config Debug] BaseDir: {baseDir}");
-             Console.Error.WriteLine($"[Config Debug] DeepSearch: {deepSearch}");
+            // Reliable path discovery: look for config.json starting from .exe up to root
+            string? currentDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string? configPath = null;
 
-            // Strategy:
-            // 1. Explicit copy in BaseDir (from .csproj CopyToOutput)
-            if (File.Exists(Path.Combine(baseDir, "config.json")))
+            while (currentDir != null)
             {
-                configPath = Path.Combine(baseDir, "config.json");
-            }
-            // 2. CWD (if running from root)
-            else if (File.Exists("config.json")) 
-            {
-                configPath = Path.GetFullPath("config.json");
-            }
-            // 3. Upwards traversal (Development)
-            else if (File.Exists(deepSearch))
-            {
-                configPath = deepSearch;
-            }
-            
-            if (!File.Exists(configPath))
-            {
-                Console.Error.WriteLine($"[Config Failure] Could not find config.json. Searched: CWD, BaseDir, and {deepSearch}");
-                throw new FileNotFoundException($"Configuration file not found at {configPath}");
+                string check = Path.Combine(currentDir, "config.json");
+                if (File.Exists(check)) { configPath = check; break; }
+                currentDir = Path.GetDirectoryName(currentDir);
             }
 
-            // Config loaded silently to avoid MCP client error display
+            if (configPath == null)
+            {
+                if (File.Exists("config.json")) configPath = Path.GetFullPath("config.json");
+                else throw new FileNotFoundException("Could not find config.json in any parent directory.");
+            }
+
+            Console.Error.WriteLine($"[Gateway] Loading config from: {configPath}");
             string json = File.ReadAllText(configPath);
             var config = JsonConvert.DeserializeObject<Configuration>(json);
             
-            if (config == null) throw new Exception("Failed to deserialize configuration");
+            if (config == null) throw new Exception("Failed to parse config.json");
             
-            // Validate required fields
-            if (config.GeneXus?.InstallationPath == null) throw new Exception("Config: GeneXus.InstallationPath is missing");
-            if (config.GeneXus?.WorkerExecutable == null) throw new Exception("Config: GeneXus.WorkerExecutable is missing");
-            if (config.Server == null) config.Server = new ServerConfig(); 
+            // Critical Validation
+            if (string.IsNullOrEmpty(config.Environment?.KBPath))
+            {
+                Console.Error.WriteLine("[Gateway] WARNING: Environment.KBPath is missing in config.json!");
+            }
+            else 
+            {
+                Console.Error.WriteLine($"[Gateway] KB Path configured: {config.Environment.KBPath}");
+            }
 
             return config;
         }
@@ -74,5 +74,10 @@ namespace GxMcp.Gateway
     {
         public string? Level { get; set; }
         public string? Path { get; set; }
+    }
+
+    public class EnvironmentConfig
+    {
+        public string? KBPath { get; set; }
     }
 }

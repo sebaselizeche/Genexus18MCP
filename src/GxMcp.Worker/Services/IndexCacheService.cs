@@ -131,11 +131,24 @@ namespace GxMcp.Worker.Services
         public void UpdateEntry(global::Artech.Architecture.Common.Objects.KBObject obj)
         {
             var index = GetIndex();
+            string parentName = null;
+            string moduleName = null;
+            try {
+                if (obj.Parent != null && obj.Parent.Guid != obj.Guid) {
+                    if (obj.Parent.TypeDescriptor.Name == "DesignModel") parentName = "Root Module";
+                    else if (obj.Parent is global::Artech.Architecture.Common.Objects.Module || obj.Parent is global::Artech.Architecture.Common.Objects.Folder)
+                        parentName = obj.Parent.Name;
+                }
+            } catch { }
+            try { if (obj.Module != null && obj.Module.Guid != obj.Guid) moduleName = obj.Module.Name; } catch { }
+
             var entry = new SearchIndex.IndexEntry
             {
                 Name = obj.Name,
                 Type = obj.TypeDescriptor.Name,
-                Description = obj.Description
+                Description = obj.Description,
+                Parent = parentName,
+                Module = moduleName
             };
 
             if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)

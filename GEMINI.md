@@ -22,6 +22,7 @@ The project includes a mini IDE for VS Code (**Nexus-IDE**) that complements the
 1.  **Direct Editing**: The agent can assume the user is using Nexus-IDE for visual inspection.
 2.  **Part Switching**: Nexus-IDE uses the same "Parts" logic as the MCP (`Source`, `Rules`, `Events`, `Variables`).
 3.  **Virtual FS**: Files are accessed via `genexus:/[Type]/[Name]` in VS Code, powered by the same Gateway.
+4.  **ALWAYS COMPILE**: After ANY change to C# or TypeScript code, the agent MUST run the full build (`.\build.ps1` and `npm run compile`) and notify the user to reload the IDE or restart the server.
 
 ## [Tools] Elite Tool Usage Guide
 

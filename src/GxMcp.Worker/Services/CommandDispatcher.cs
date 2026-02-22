@@ -40,6 +40,7 @@ namespace GxMcp.Worker.Services
             _buildService = new BuildService();
             _indexCacheService = new IndexCacheService(_buildService);
             _kbService = new KbService(_buildService, _indexCacheService);
+            _buildService.SetKbService(_kbService);
             _objectService = new ObjectService(_kbService, _buildService);
             _writeService = new WriteService(_objectService);
             _listService = new ListService(_kbService);
@@ -112,7 +113,7 @@ namespace GxMcp.Worker.Services
                         case "UI":
                             if (action == "GetUIContext") return _uiService.GetUIContext(target);
                             return "{\"error\":\"Unknown UI action\"}";
-                        case "Doctor": return _buildService.Doctor(target);
+                        // case "Doctor": return _buildService.Doctor(target);
                         case "Batch": return _batchService.ProcessBatch(action, target, payload);
                         case "Forge": return _forgeService.Scaffold(target, payload, @params);
                         case "Refactor": return _refactorService.Refactor(target, action);
@@ -132,6 +133,7 @@ namespace GxMcp.Worker.Services
                         );
                         case "Test": return _testService.RunTest(target);
                         case "Validation": return _validationService.ValidateCode(target, @params["part"] != null ? @params["part"].ToString() : null, payload);
+                        case "Build": return _buildService.Build(action, target);
                     }
                 }
 

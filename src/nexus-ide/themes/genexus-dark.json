@@ -1,0 +1,53 @@
+{
+	"name": "GeneXus Dark",
+	"type": "dark",
+	"colors": {
+		"editor.background": "#1E1E1E",
+		"editor.foreground": "#D4D4D4",
+		"editorLineNumber.foreground": "#858585",
+		"editorLineNumber.activeForeground": "#C6C6C6",
+		"editorIndentGuide.background": "#404040"
+	},
+	"tokenColors": [
+		{
+			"name": "Comments",
+			"scope": "comment",
+			"settings": {
+				"foreground": "#6A9955"
+			}
+		},
+		{
+			"name": "Variables",
+			"scope": "variable.other.gx",
+			"settings": {
+				"foreground": "#B5CEA8"
+			}
+		},
+		{
+			"name": "Keywords",
+			"scope": "keyword.control.gx",
+			"settings": {
+				"foreground": "#569CD6",
+				"fontStyle": "bold"
+			}
+		},
+		{
+			"name": "Functions and Strings",
+			"scope": [
+				"support.function.gx",
+				"entity.name.function.gx",
+				"string.quoted.gx"
+			],
+			"settings": {
+				"foreground": "#D16969"
+			}
+		},
+		{
+			"name": "Numbers",
+			"scope": "constant.numeric.gx",
+			"settings": {
+				"foreground": "#B5CEA8"
+			}
+		}
+	]
+}
