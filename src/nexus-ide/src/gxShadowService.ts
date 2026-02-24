@@ -1,22 +1,33 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { TYPE_SUFFIX } from './gxFileSystem';
 
 export class GxShadowService {
     private _shadowRoot: string;
     private _baseUrl: string;
-    private _ignoredPaths: Set<string> = new Set();
+    private _fileHashes: Map<string, string> = new Map();
+    private readonly MAX_HASHES = 500; // Proteção contra vazamento de memória
 
     constructor(baseUrl: string) {
         this._baseUrl = baseUrl;
         
-        // Native Integration: Always use workspace root for shadow files 
-        // to ensure Gemini CLI can index them natively.
-        // Optimization: Find the first PHYSICAL folder (ignore virtual genexus:/)
-        const workspaceRoot = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath 
-            || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath 
-            || '';
+        let workspaceRoot = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath;
+        
+        // Seletion Fallback: Se estivermos em um workspace puramente virtual (genexus:/),
+        // procuramos a raiz física real caminhando para cima a partir da extensão.
+        if (!workspaceRoot || workspaceRoot.startsWith('genexus')) {
+            let current = __dirname;
+            while (current !== path.dirname(current)) {
+                if (fs.existsSync(path.join(current, '.git')) || fs.existsSync(path.join(current, 'Genexus18MCP.sln'))) {
+                    workspaceRoot = current;
+                    break;
+                }
+                current = path.dirname(current);
+            }
+            if (!workspaceRoot) workspaceRoot = process.cwd();
+        }
             
         this._shadowRoot = path.join(workspaceRoot, '.gx_mirror');
         
@@ -47,12 +58,20 @@ export class GxShadowService {
             const shadowFileName = `${objName}${cleanPart}.gx`;
             const shadowPath = path.join(typeDir, shadowFileName);
 
-            // MUTEX: Evitar loop de feedback quando nós mesmos escrevemos no espelho
-            this._ignoredPaths.add(shadowPath);
-            fs.writeFileSync(shadowPath, content);
+            // MUTEX: Calcula o hash do conteúdo que estamos salvando para evitar loop de feedback
+            const hash = crypto.createHash('sha256').update(content).digest('hex');
             
-            // Limpa o ignore após um pequeno delay para capturar o evento do Watcher
-            setTimeout(() => this._ignoredPaths.delete(shadowPath), 2000);
+            // Gestão de Memória: Pruning do Map se exceder o limite
+            if (this._fileHashes.size >= this.MAX_HASHES) {
+                const firstKey = this._fileHashes.keys().next().value;
+                if (firstKey) this._fileHashes.delete(firstKey);
+            }
+            this._fileHashes.set(shadowPath, hash);
+            
+            // ESCRITA ATÔMICA: Salva em arquivo temporário e renomeia
+            const tmpPath = `${shadowPath}.tmp`;
+            fs.writeFileSync(tmpPath, content);
+            fs.renameSync(tmpPath, shadowPath);
 
             console.log(`[Shadow Service] 🚀 Mirrored ${objName} (${part}) to disk.`);
             return shadowPath;
@@ -63,7 +82,25 @@ export class GxShadowService {
     }
 
     public shouldIgnore(filePath: string): boolean {
-        return this._ignoredPaths.has(filePath);
+        if (!fs.existsSync(filePath)) return true;
+        
+        try {
+            const content = fs.readFileSync(filePath);
+            const currentHash = crypto.createHash('sha256').update(content).digest('hex');
+            const expectedHash = this._fileHashes.get(filePath);
+            
+            // Se o hash for idêntico ao último que NÓS salvamos, ignoramos o evento
+            if (currentHash === expectedHash) {
+                return true;
+            }
+            
+            // Se o hash for diferente (modificado por IA ou usuário externamente), atualizamos o registro
+            // e permitimos o sync para a KB
+            this._fileHashes.set(filePath, currentHash);
+            return false;
+        } catch (e) {
+            return false;
+        }
     }
 
     /**
@@ -88,6 +125,9 @@ export class GxShadowService {
 
             console.log(`[Shadow Service] 💾 Disk -> KB Sync: ${objName} (Part: ${partName})`);
 
+            // ENCODING FIX: Convert content to Base64 to prevent Windows-1252 corruption in the Worker
+            const base64Content = Buffer.from(content, 'utf8').toString('base64');
+
             // Use fetch to call Gateway Write command
             const response = await fetch(this._baseUrl, {
                 method: 'POST',
@@ -98,7 +138,8 @@ export class GxShadowService {
                         module: 'Write',
                         target: objName,
                         action: partName,
-                        payload: content
+                        payload: base64Content,
+                        shadowPath: this._shadowRoot
                     }
                 })
             });

@@ -9,6 +9,7 @@ namespace GxMcp.Worker.Services
 {
     public class CommandDispatcher
     {
+        public static string LastRequest { get; private set; }
         private static CommandDispatcher _instance;
         private static readonly object _lock = new object();
 
@@ -79,6 +80,7 @@ namespace GxMcp.Worker.Services
 
         public string Dispatch(string line)
         {
+            LastRequest = line;
             try
             {
                 Logger.Debug(string.Format("Dispatching command: {0}", line.Length > 500 ? line.Substring(0, 500) + "..." : line));

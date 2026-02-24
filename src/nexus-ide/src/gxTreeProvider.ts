@@ -137,6 +137,18 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
             });
 
             this._cache.set(parentName, { items, time: Date.now() });
+
+            // --- ELITE PRE-FETCH ---
+            // Se acabamos de carregar a raiz (Root Module), disparamos o carregamento dos filhos
+            // das primeiras 5 pastas em background para navegação instantânea.
+            if (!element) {
+                const containers = items.filter(i => i.contextValue === 'folder' || i.gxType === 'Module').slice(0, 5);
+                for (const folder of containers) {
+                    // Dispara a busca mas não aguarda o retorno (Background fetch)
+                    this.getChildren(folder).catch(() => {});
+                }
+            }
+
             return items;
 
         } catch (e) {

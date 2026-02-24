@@ -173,6 +173,19 @@ export async function activate(context: vscode.ExtensionContext) {
         isReadonly: false
     }));
 
+    // --- HISTORY DIFF PROVIDER ---
+    const historyProvider = new class implements vscode.TextDocumentContentProvider {
+        private _data = new Map<string, string>();
+        provideTextDocumentContent(uri: vscode.Uri): string { return this._data.get(uri.toString()) || ""; }
+        update(uri: vscode.Uri, content: string) { this._data.set(uri.toString(), content); }
+        clear(uriPrefix: string) {
+            for (const key of this._data.keys()) {
+                if (key.includes(uriPrefix)) this._data.delete(key);
+            }
+        }
+    }();
+    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('gx-history', historyProvider));
+
     context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider('genexus', new GxDocumentSymbolProvider()));
     context.subscriptions.push(vscode.languages.registerDefinitionProvider('genexus', new GxDefinitionProvider((cmd) => provider.callGateway(cmd))));
     context.subscriptions.push(vscode.languages.registerHoverProvider('genexus', new GxHoverProvider((cmd) => provider.callGateway(cmd))));
@@ -435,10 +448,14 @@ export async function activate(context: vscode.ExtensionContext) {
         await diagnosticProvider.refreshAll();
     }));
 
-    // Intercept standard Save event for debug
+    // Intercept standard Save event for debug and Linter On-Save
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc: vscode.TextDocument) => {
         if (doc.uri.scheme === 'genexus') {
-            console.log(`[Nexus IDE] onDidSaveTextDocument: ${doc.uri.path}`);
+            console.log(`[Nexus IDE] onDidSaveTextDocument (Linter Triggered): ${doc.uri.path}`);
+            // PERFORMANCE: Pequeno delay para garantir que o Worker terminou o commit da transação
+            setTimeout(() => {
+                diagnosticProvider.refreshAll();
+            }, 1000);
         }
     }));
 
@@ -686,6 +703,158 @@ export async function activate(context: vscode.ExtensionContext) {
         });
     }));
 
+    context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.viewHistory', async (item?: GxTreeItem) => {
+        // ... (lógica de abertura do painel continua igual até o listener)
+        let objName = '';
+        if (item && item.gxName) {
+            objName = item.gxName;
+        } else {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === 'genexus') {
+                const path = decodeURIComponent(editor.document.uri.path.substring(1));
+                objName = path.split('/').pop()!.replace('.gx', '');
+            }
+        }
+
+        if (!objName) {
+            vscode.window.showErrorMessage("Abra ou selecione um objeto para ver o histórico.");
+            return;
+        }
+
+        const panel = vscode.window.createWebviewPanel(
+            'gxHistory',
+            `Histórico: ${objName}`,
+            vscode.ViewColumn.Beside,
+            { enableScripts: true }
+        );
+
+        panel.webview.html = `<h1>Carregando Histórico de ${objName}...</h1>`;
+
+        panel.onDidDispose(() => {
+            historyProvider.clear(objName);
+        });
+
+        try {
+            const result = await provider.callGateway({
+                method: 'execute_command',
+                params: { module: 'History', action: 'List', target: objName }
+            });
+
+            if (result && result.history) {
+                // Montar tabela HTML bonita com o histórico
+                let rows = '';
+                if (Array.isArray(result.history)) {
+                    // Ordenar: Mais recente primeiro
+                    const sortedHistory = [...result.history].reverse();
+
+                    rows = sortedHistory.map((rev: any) => `
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #333; font-weight: bold; color: #007acc;">#${rev.version || rev.Id || ''}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #333; white-space: nowrap;">${rev.date || rev.Date || ''}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #333;">${rev.user || rev.User || ''}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #333; font-style: italic; color: #aaa;">${rev.comment || rev.Comment || '<span style="opacity: 0.5;">Sem comentário</span>'}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #333; text-align: center;">
+                                <button onclick="viewDiff(${rev.version || rev.Id})" style="background: #007acc; color: white; border: none; padding: 4px 8px; cursor: pointer; border-radius: 2px;">Comparar (Diff)</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else if (typeof result.history === 'string') {
+                    rows = `<tr><td colspan="5"><pre>${result.history}</pre></td></tr>`;
+                }
+
+                panel.webview.html = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <style>
+                            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background-color: #1e1e1e; color: #ccc; }
+                            table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #252526; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; }
+                            th { background-color: #333333; color: #fff; text-align: left; padding: 12px 10px; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; }
+                            tr:hover { background-color: #2d2d2d; }
+                            h2 { color: #fff; border-bottom: 1px solid #444; padding-bottom: 10px; }
+                            .badge { background: #007acc; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; margin-left: 10px; }
+                        </style>
+                    </head>
+                    <body>
+                        <h2>Histórico de Revisões: ${objName} <span class="badge">SDK Nativo</span></h2>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Rev</th>
+                                    <th>Data / Hora</th>
+                                    <th>Autor</th>
+                                    <th>Comentário de Commit</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows || '<tr><td colspan="5" style="padding: 20px; text-align: center;">Nenhuma revisão encontrada.</td></tr>'}</tbody>
+                        </table>
+
+                        <script>
+                            const vscode = acquireVsCodeApi();
+                            function viewDiff(vId) {
+                                vscode.postMessage({ command: 'viewDiff', versionId: vId, objName: '${objName}' });
+                            }
+                        </script>
+                    </body>
+                    </html>
+                `;
+
+                // Listener para mensagens vindas da Webview
+                panel.webview.onDidReceiveMessage(async (message) => {
+                    if (message.command === 'viewDiff') {
+                        vscode.window.setStatusBarMessage(`$(sync~spin) Buscando Revisão #${message.versionId} para Diff...`, 3000);
+                        try {
+                            // Re-resolve currentUri inside the listener context to ensure it's captured correctly
+                            let listenerCurrentUri: vscode.Uri | undefined;
+                            const editor = vscode.window.activeTextEditor;
+                            if (editor && editor.document.uri.scheme === 'genexus') {
+                                listenerCurrentUri = editor.document.uri;
+                            } else {
+                                // Fallback based on objName if editor changed
+                                listenerCurrentUri = vscode.Uri.parse(`genexus:/Procedure/${message.objName}.gx`);
+                            }
+
+                            const codeResult = await provider.callGateway({
+                                method: 'execute_command',
+                                params: { 
+                                    module: 'History', 
+                                    action: 'get_source', 
+                                    target: message.objName,
+                                    versionId: message.versionId
+                                }
+                            });
+
+                            if (codeResult && codeResult.source) {
+                                const historicalContent = Buffer.from(codeResult.source, 'base64').toString('utf8');
+                                
+                                // Criar URI virtual para a versão histórica
+                                const historyUri = vscode.Uri.parse(`gx-history:/v${message.versionId}/${message.objName}.gx`);
+                                historyProvider.update(historyUri, historicalContent);
+
+                                // Executar o comando nativo de Diff do VS Code
+                                await vscode.commands.executeCommand('vscode.diff', 
+                                    historyUri, 
+                                    listenerCurrentUri!, 
+                                    `${message.objName} (Revisão #${message.versionId}) ↔ (Atual)`
+                                );
+                            } else {
+                                vscode.window.showErrorMessage(`Não foi possível recuperar o código da versão ${message.versionId}`);
+                            }
+                        } catch (e) {
+                            vscode.window.showErrorMessage(`Erro ao buscar versão: ${e}`);
+                        }
+                    }
+                });
+            } else {
+                panel.webview.html = "<h1>Histórico não encontrado ou módulo indisponível.</h1>" + 
+                                     (result?.error ? `<p>${result.error}</p>` : "");
+            }
+        } catch (e) {
+            panel.webview.html = `<h1>Erro Crítico: ${e}</h1>`;
+        }
+    }));
+
     context.subscriptions.push(vscode.commands.registerCommand('nexus-ide.generateDiagram', async (item?: GxTreeItem) => {
         let objName = '';
         if (item && item.gxName) {
@@ -800,6 +969,41 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         });
     }));
+
+    // --- ACTIVE HEALTH CHECK (HEARTBEAT) ---
+    // Monitora a saúde do Gateway a cada 20 segundos
+    let failedPings = 0;
+    setInterval(async () => {
+        try {
+            // Se estivermos em BulkIndex, aumentamos drasticamente o tempo de tolerância
+            const timeout = isBulkIndexing ? 15000 : 5000;
+            const res = await provider.callGateway({ method: 'ping' }, timeout);
+            if (res) {
+                failedPings = 0; // Gateway is healthy
+            }
+        } catch (e) {
+            // Ignora falhas se soubermos que o Worker está ocupado processando a KB
+            if (isBulkIndexing) return;
+
+            failedPings++;
+            if (failedPings >= 3) { // Tolerância de 3 falhas consecutivas
+                vscode.window.showWarningMessage(
+                    "GeneXus MCP Server parou de responder. O SDK pode estar sobrecarregado ou travado.",
+                    "Restart Services",
+                    "Wait"
+                ).then(selection => {
+                    if (selection === "Restart Services") {
+                        vscode.window.setStatusBarMessage("$(sync~spin) Reiniciando GeneXus MCP...", 5000);
+                        if (backendProcess && !backendProcess.killed) {
+                            backendProcess.kill();
+                        }
+                        startBackend(context);
+                        failedPings = 0;
+                    }
+                });
+            }
+        }
+    }, 20000);
 }
 
 export function deactivate() {

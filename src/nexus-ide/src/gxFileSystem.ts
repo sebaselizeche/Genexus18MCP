@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 import { GxShadowService } from './gxShadowService';
 
 // Maps GeneXus type names → suffix before .gx
@@ -139,7 +141,22 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         }
 
         const cachedContent = this._contentCache.get(uri.toString());
-        const size = cachedContent ? cachedContent.byteLength : 1024; 
+        
+        // PERFORMANCE: If not in memory cache, don't guess 1024. 
+        // We could look into Shadow Mirror or Search Cache for actual size.
+        let size = cachedContent ? cachedContent.byteLength : 0;
+
+        if (size === 0) {
+            // Check if it's a physical mirror file to get accurate size without calling SDK
+            const objName = pathStr.split('/').pop()!.replace('.gx', '');
+            const objType = pathStr.split('/')[0];
+            const shadowPath = path.join(this._shadowService?.shadowRoot || '', objType, `${objName}.gx`);
+            if (fs.existsSync(shadowPath)) {
+                size = fs.statSync(shadowPath).size;
+            } else {
+                size = 1024; // Fallback
+            }
+        }
 
         if (!this._mtimes.has(uri.toString())) {
             this._mtimes.set(uri.toString(), Date.now()); 

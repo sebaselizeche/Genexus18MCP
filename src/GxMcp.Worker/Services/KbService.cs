@@ -202,7 +202,7 @@ namespace GxMcp.Worker.Services
                                             }
                                         }
                                     }
-                                } catch { }
+                                } catch (Exception shadowEx) { Logger.Error("Shadow Sync Error: " + shadowEx.Message); }
                             }
 
                             index.Objects[string.Format("{0}:{1}", entry.Type, entry.Name)] = entry;

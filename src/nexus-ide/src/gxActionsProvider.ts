@@ -30,7 +30,8 @@ export class GxActionsProvider implements vscode.TreeDataProvider<ActionItem> {
         if (element.contextValue === 'modeling') {
             return [
                 new ActionItem('New GeneXus Object...', vscode.TreeItemCollapsibleState.None, 'action', 'add', 'nexus-ide.newObject'),
-                new ActionItem('Rename Attribute (Global)...', vscode.TreeItemCollapsibleState.None, 'action', 'edit', 'nexus-ide.renameAttribute')
+                new ActionItem('Rename Attribute (Global)...', vscode.TreeItemCollapsibleState.None, 'action', 'edit', 'nexus-ide.renameAttribute'),
+                new ActionItem('View Object History', vscode.TreeItemCollapsibleState.None, 'action', 'history', 'nexus-ide.viewHistory')
             ];
         }
 
