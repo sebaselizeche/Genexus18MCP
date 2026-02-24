@@ -79,5 +79,6 @@ namespace GxMcp.Gateway
     public class EnvironmentConfig
     {
         public string? KBPath { get; set; }
+        public string? GX_SHADOW_PATH { get; set; }
     }
 }

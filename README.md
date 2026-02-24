@@ -6,7 +6,7 @@ A high-performance **Model Context Protocol (MCP)** server for GeneXus 18, enabl
 
 ## [Main] Key Features
 
-- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.* DLLs) for deep analysis and manipulation.
+- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.\* DLLs) for deep analysis and manipulation.
 - **Unified Discovery Engine**:
   - **Instant Search**: Local index-based search for KBs with 30,000+ objects.
   - **Direct GUID Access**: Bypasses slow UI lazy-loading, making code reading 100x faster.
@@ -27,25 +27,45 @@ The project now includes **Nexus-IDE**, a lightweight VS Code extension that tra
 - **KB Explorer**: Browse your Knowledge Base hierarchy (Folders, Modules, Objects) directly from the Activity Bar.
 - **Multi-Part Editing**: Seamlessly switch between **Source**, **Rules**, **Events**, and **Variables** using dedicated editor actions.
 - **Real-time Indexing**: Powered by the same high-performance engine as the MCP server for instant search and navigation.
-- **Deep Integration**: Built-in support for Symbols, Search (Ctrl+P), and high-fidelity GeneXus icons.
+- **Deep Integration**: Built-in support for Symbols, Search (Ctrl+P), and professional GeneXus icons.
+- **Auto-Start & Config Sync**: Automatic backend management and settings synchronization.
+- **AI Agent-Ready**: Built-in command to export MCP configuration for external tools (Copilot/Claude).
 
 ---
 
 ## [Setup] Installation & Setup
 
-### Prerequisites
+### For Users (Recommended)
+
+If you received a `.vsix` file:
+
+1. Install it in VS Code via **Extensions -> Install from VSIX**.
+2. **Open your KB folder** in VS Code (where the `.gxw` file is).
+3. The extension will **auto-discover** your Knowledge Base and GeneXus installation.
+4. The backend starts automatically!
+
+For manual configuration or troubleshooting, see the [Sharing Guide](file:///c:/Projetos/GenexusMCP/docs/SHARING_GUIDE.md).
+
+### For Developers (Build from Source)
+
+#### Prerequisites
+
 - Windows 10/11.
 - **GeneXus 18** (Tested with Upgrade 7+).
 - **.NET 8 SDK** and **.NET Framework 4.8**.
 
-### 1. Build the Project
-Run the included build script to compile and prepare the `publish/` directory:
+#### 1. Build the Project
+
+Run the included build script to compile and prepare the binaries:
+
 ```powershell
 .\build.ps1
 ```
 
-### 2. Configure `config.json`
-Edit `publish\config.json`:
+#### 2. Local Configuration
+
+Edit `publish\config.json` (for standalone MCP usage):
+
 ```json
 {
   "GeneXus": {

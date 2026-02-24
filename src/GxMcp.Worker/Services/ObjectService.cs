@@ -4,6 +4,7 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Artech.Architecture.Common.Objects;
+using Artech.Architecture.Common.Descriptors;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
 using Newtonsoft.Json.Linq;
@@ -30,6 +31,55 @@ namespace GxMcp.Worker.Services
         public KbService GetKbService() { return _kbService; }
 
         public SearchIndex GetIndex() { return _kbService.GetIndexCache().GetIndex(); }
+
+        public string CreateObject(string type, string name)
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                var kb = _kbService.GetKB();
+                if (kb == null) return "{\"status\":\"Error\", \"error\":\"No KB open\"}";
+
+                Logger.Info(string.Format("Creating Object: {0} ({1})", name, type));
+
+                // Map string type to Guid
+                Guid typeGuid = Guid.Empty;
+                if (type.Equals("Procedure", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Procedure>().Id;
+                else if (type.Equals("Transaction", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Transaction>().Id;
+                else if (type.Equals("WebPanel", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.WebPanel>().Id;
+                else if (type.Equals("SDT", StringComparison.OrdinalIgnoreCase) || type.Equals("StructuredDataType", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.SDT>().Id;
+                else if (type.Equals("DataProvider", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.DataProvider>().Id;
+                else if (type.Equals("Attribute", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Attribute>().Id;
+                else if (type.Equals("Table", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Table>().Id;
+                else if (type.Equals("SDPanel", StringComparison.OrdinalIgnoreCase)) typeGuid = Guid.Parse("702119eb-90e9-4e78-958b-96d5e182283a"); // SDPanel Guid
+
+                if (typeGuid == Guid.Empty) return "{\"status\":\"Error\", \"error\":\"Unsupported object type: " + type + "\"}";
+
+                KBObject newObj = KBObject.Create(kb.DesignModel, typeGuid);
+                newObj.Name = name;
+                
+                // Initialize with some default content if possible
+                if (newObj is global::Artech.Genexus.Common.Objects.Procedure proc)
+                {
+                    proc.ProcedurePart.Source = "// Procedure: " + name + "\n\n";
+                }
+                else if (newObj is global::Artech.Genexus.Common.Objects.DataProvider dp)
+                {
+                    var part = dp.Parts.Get<SourcePart>();
+                    if (part != null) part.Source = "// Data Provider: " + name + "\n\n";
+                }
+
+                newObj.Save();
+                
+                Logger.Info(string.Format("Object created successfully in {0}ms", sw.ElapsedMilliseconds));
+                return "{\"status\":\"Success\", \"type\":\"" + type + "\", \"name\":\"" + name + "\"}";
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("CreateObject failed: " + ex.Message);
+                return "{\"status\":\"Error\", \"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
 
         public KBObject FindObject(string target)
         {
@@ -168,17 +218,14 @@ namespace GxMcp.Worker.Services
                 // Handle Variables Part specially
                 if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
                 {
-                    var sb = new System.Text.StringBuilder();
-                    foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
-                    {
-                        sb.AppendLine(string.Format("&{0} : {1}({2}{3})", v.Name, v.Type, v.Length, v.Decimals > 0 ? "," + v.Decimals : ""));
-                    }
-                    result["source"] = sb.ToString();
-                    Logger.Info("ReadSource (Variables as Text) SUCCESS");
+                    string varText = VariableInjector.GetVariablesAsText(varPart);
+                    result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(varText));
+                    result["isBase64"] = true;
+                    Logger.Info("ReadSource (Variables as Base64) SUCCESS");
                 }
                 else if (part is ISource sourcePart)
                 {
-                    string content = sourcePart.Source;
+                    string content = sourcePart.Source ?? "";
                     
                     if (offset.HasValue || limit.HasValue)
                     {
@@ -191,25 +238,29 @@ namespace GxMcp.Worker.Services
                         else if (start + count > lines.Length) count = lines.Length - start;
 
                         string paginatedContent = string.Join(Environment.NewLine, lines.Skip(start).Take(count));
-                        result["source"] = paginatedContent;
+                        result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(paginatedContent));
+                        result["isBase64"] = true;
                         result["offset"] = start;
                         result["limit"] = count;
                         result["totalLines"] = lines.Length;
 
                         AddVariableMetadata(obj, paginatedContent, result);
-                        Logger.Info(string.Format("ReadSource (Paginated {0}-{1}) SUCCESS", start, start+count));
+                        Logger.Info(string.Format("ReadSource (Paginated Base64 {0}-{1}) SUCCESS", start, start+count));
                     }
                     else
                     {
-                        result["source"] = content;
+                        result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
+                        result["isBase64"] = true;
                         AddVariableMetadata(obj, content, result);
-                        Logger.Info("ReadSource (Full Text) SUCCESS");
+                        Logger.Info("ReadSource (Full Base64) SUCCESS");
                     }
                 }
                 else
                 {
-                    result["source"] = part.SerializeToXml();
-                    Logger.Info("ReadSource (XML serialized) SUCCESS");
+                    string xml = part.SerializeToXml();
+                    result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(xml));
+                    result["isBase64"] = true;
+                    Logger.Info("ReadSource (XML Base64) SUCCESS");
                 }
 
                 return result.ToString();

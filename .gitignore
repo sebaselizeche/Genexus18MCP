@@ -13,6 +13,7 @@
 .history/
 batch_buffer/
 cache/
+.gx_mirror/
 
 # --- IDE & OS ---
 .vscode/

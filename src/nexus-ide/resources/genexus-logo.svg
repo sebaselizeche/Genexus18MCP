@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="180 140 650 650" width="100%" height="100%">
+  <defs>
+    <path id="g-path" d="M 575 300 
+             C 515 260, 455 240, 365 240 
+             C 271 240, 195 334, 195 450 
+             C 195 566, 271 660, 365 660 
+             C 448 660, 515 611, 515 550 
+             L 515 440 
+             L 415 440 
+             L 415 490 
+             C 415 529, 393 560, 365 560 
+             C 326 560, 295 511, 295 450 
+             C 295 389, 326 340, 365 340 
+             C 455 340, 515 340, 575 300 Z" />
+    
+    <mask id="g-mask">
+      <rect width="1000" height="1000" fill="white" />
+      <use href="#g-path" fill="black" stroke="black" stroke-width="36" stroke-linejoin="round" stroke-linecap="round" />
+    </mask>
+  </defs>
+
+  <!-- Background rect removed to avoid solid white square in VS Code Activity Bar -->
+
+  <use href="#g-path" fill="currentColor" />
+
+  <g mask="url(#g-mask)" fill="currentColor">
+    <polygon points="495,660 605,660 805,240 695,240" />
+    <polygon points="495,240 605,240 805,660 695,660" />
+  </g>
+</svg>

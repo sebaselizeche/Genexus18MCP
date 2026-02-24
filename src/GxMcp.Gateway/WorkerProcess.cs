@@ -47,6 +47,9 @@ namespace GxMcp.Gateway
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardInputEncoding = System.Text.Encoding.UTF8,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -61,6 +64,7 @@ namespace GxMcp.Gateway
             startInfo.Arguments = $"--kb \"{kbPath}\"";
             startInfo.EnvironmentVariables["GX_PROGRAM_DIR"] = _config.GeneXus?.InstallationPath ?? "";
             startInfo.EnvironmentVariables["GX_KB_PATH"] = kbPath;
+            startInfo.EnvironmentVariables["GX_SHADOW_PATH"] = _config.Environment?.GX_SHADOW_PATH ?? Path.Combine(_config.Environment?.KBPath ?? "", ".gx_mirror");
             startInfo.EnvironmentVariables["PATH"] = (_config.GeneXus?.InstallationPath ?? "") + ";" + Environment.GetEnvironmentVariable("PATH");
 
             Console.Error.WriteLine($"[Gateway] Spawning Worker with GX_KB_PATH={kbPath}");

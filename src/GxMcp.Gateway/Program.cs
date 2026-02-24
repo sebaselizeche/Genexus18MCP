@@ -27,6 +27,9 @@ namespace GxMcp.Gateway
 
         static async Task Main(string[] args)
         {
+            // Register encoding provider for Windows-1252 support in .NET 8
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
             Console.Error.WriteLine("=== Gateway starting (Stdio Mode) ===");
             Log("=== Gateway starting (Stdio Mode) ===");
 
@@ -49,8 +52,17 @@ namespace GxMcp.Gateway
             {
                 while (true)
                 {
-                    string? line = await reader.ReadLineAsync();
-                    if (line == null) break;
+                    string? line = null;
+                    try { line = await reader.ReadLineAsync(); } catch { }
+                    
+                    if (line == null) {
+                        // If Stdio is closed but HTTP is enabled, wait forever
+                        if (config.Server?.HttpPort > 0) {
+                            Log("Stdio closed, keeping alive for HTTP...");
+                            await Task.Delay(-1);
+                        }
+                        break; 
+                    }
                     
                     try {
                         var request = JObject.Parse(line);
@@ -100,7 +112,7 @@ namespace GxMcp.Gateway
                     var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = workerCmd };
                     await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
 
-                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(60000));
+                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(600000));
                     if (completedTask == tcs.Task)
                     {
                         string resultJson = await tcs.Task;

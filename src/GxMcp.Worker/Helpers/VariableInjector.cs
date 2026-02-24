@@ -100,6 +100,23 @@ namespace GxMcp.Worker.Helpers
             return v;
         }
 
+        public static string GetVariablesAsText(KBObject obj)
+        {
+            var varPart = obj.Parts.Get<VariablesPart>();
+            if (varPart == null) return string.Empty;
+            return GetVariablesAsText(varPart);
+        }
+
+        public static string GetVariablesAsText(VariablesPart varPart)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
+            {
+                sb.AppendLine(string.Format("&{0} : {1}({2}{3})", v.Name, v.Type, v.Length, v.Decimals > 0 ? "," + v.Decimals : ""));
+            }
+            return sb.ToString();
+        }
+
         public static void SetVariablesFromText(VariablesPart part, string text)
         {
             var lines = text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);

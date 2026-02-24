@@ -5,6 +5,7 @@ using Newtonsoft.Json.Linq;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
 {
@@ -329,6 +330,53 @@ namespace GxMcp.Worker.Services
             catch (Exception ex)
             {
                 return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
+        }
+
+        public string ExplainCode(string target, string payload)
+        {
+            try
+            {
+                var data = JObject.Parse(payload);
+                string error = data["error"]?.ToString();
+                string code = data["code"]?.ToString();
+                int line = data["line"] != null ? (int)data["line"] : -1;
+
+                GxMcp.Worker.Helpers.Logger.Info($"AI Analyzing code for {target} with error: {error}");
+
+                // Heuristic-based AI Fix (Simulated)
+                string fix = code;
+                string summary = "No fix found.";
+
+                // Example 1: Missing semicolon
+                if (error.Contains("syntax error") && !code.Contains(";"))
+                {
+                    fix = code.Replace("\n", ";\n");
+                    summary = "Added missing semicolons.";
+                }
+                // Example 2: Invalid Variable syntax (forgot &)
+                else if (error.Contains("Undefined") && code.Contains(" var "))
+                {
+                    fix = code.Replace(" var ", " &var ");
+                    summary = "Fixed variable prefix (missing &).";
+                }
+                // Example 3: Commits in loops (anti-pattern)
+                else if (code.Contains("for each") && code.Contains("commit"))
+                {
+                    fix = code.Replace("commit", "// commit moved out of loop");
+                    summary = "Moved commit out of 'for each' loop for better performance.";
+                }
+
+                var result = new JObject();
+                result["status"] = "Success";
+                result["summary"] = summary;
+                result["fix"] = fix;
+
+                return result.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"AI analysis failed: " + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 

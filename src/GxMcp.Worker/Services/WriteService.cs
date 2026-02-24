@@ -83,7 +83,17 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                Logger.Info(string.Format("[DEBUG-SAVE] Request received for {0} (Part: {1}, Code Length: {2})", target, partName, code?.Length ?? 0));
+                // DEBUG ENCODING: Detect and decode Base64 if needed
+                string decodedCode = code;
+                if (!string.IsNullOrEmpty(code) && (code.EndsWith("=") || code.Length > 100)) {
+                    try {
+                        byte[] data = Convert.FromBase64String(code);
+                        decodedCode = System.Text.Encoding.UTF8.GetString(data);
+                        Logger.Info("[DEBUG-SAVE] Payload decoded from Base64.");
+                    } catch { /* Not base64, use as is */ }
+                }
+
+                Logger.Info(string.Format("[DEBUG-SAVE] Request received for {0} (Part: {1}, Code Length: {2})", target, partName, decodedCode?.Length ?? 0));
                 
                 var obj = _objectService.FindObject(target);
                 if (obj == null) {
@@ -93,11 +103,7 @@ namespace GxMcp.Worker.Services
 
                 Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
 
-                // Log all parts for debugging
-                foreach (var p in obj.Parts) {
-                    Logger.Debug(string.Format("[DEBUG-SAVE] Available Part: {0} (GUID: {1}, Type: {2})", p.TypeDescriptor?.Name, p.Type, p.GetType().Name));
-                }
-
+                // ... (rest of the log)
                 Guid partGuid = MapLogicalPartToGuid(obj.TypeDescriptor.Name, partName);
                 global::Artech.Architecture.Common.Objects.KBObjectPart part = null;
                 
@@ -123,43 +129,40 @@ namespace GxMcp.Worker.Services
                     return "{\"error\": \"Part not found in " + obj.TypeDescriptor.Name + "\"}";
                 }
 
-                Logger.Info(string.Format("[DEBUG-SAVE] Target Part Selected: {0} (GUID: {1}, Type: {2})", part.TypeDescriptor?.Name, part.Type, part.GetType().Name));
-
                 // 1. SET CONTENT
                 bool contentSet = false;
                 if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
                 {
-                    Logger.Debug("[DEBUG-SAVE] Updating Variables via SetVariablesFromText...");
-                    VariableInjector.SetVariablesFromText(varPart, code);
+                    VariableInjector.SetVariablesFromText(varPart, decodedCode);
                     contentSet = true;
                 }
                 else if (part is global::Artech.Architecture.Common.Objects.ISource sourcePart)
                 {
-                    Logger.Debug("[DEBUG-SAVE] Updating ISource.Source content...");
-                    sourcePart.Source = code;
+                    // NO-CHANGE SKIP: If code is identical, don't trigger Save/Commit
+                    if (sourcePart.Source == decodedCode)
+                    {
+                        Logger.Info("[DEBUG-SAVE] Content is identical. Skipping Save.");
+                        return "{\"status\": \"Success\", \"details\": \"No change\"}";
+                    }
+
+                    sourcePart.Source = decodedCode;
                     contentSet = true;
                 }
                 else
                 {
-                    // Fallback for non-ISource parts (like Structure)
-                    Logger.Debug("[DEBUG-SAVE] Attempting generic persistence for non-ISource part...");
                     try {
-                        // For structured parts, we try SerializeFromXml first if it looks like XML
-                        if (code.Trim().StartsWith("<")) {
-                            part.DeserializeFromXml(code);
+                        if (decodedCode.Trim().StartsWith("<")) {
+                            part.DeserializeFromXml(decodedCode);
                             contentSet = true;
-                            Logger.Debug("[DEBUG-SAVE] Content set via DeserializeFromXml.");
                         } else {
-                            // Try to find a property like 'Source' or 'Content' via reflection
                             var contentProp = part.GetType().GetProperty("Source", BindingFlags.Public | BindingFlags.Instance)
                                            ?? part.GetType().GetProperty("Content", BindingFlags.Public | BindingFlags.Instance);
                             if (contentProp != null && contentProp.CanWrite) {
-                                contentProp.SetValue(part, code);
+                                contentProp.SetValue(part, decodedCode);
                                 contentSet = true;
-                                Logger.Debug("[DEBUG-SAVE] Content set via property: " + contentProp.Name);
                             }
                         }
-                    } catch (Exception ex) { Logger.Error("[DEBUG-SAVE] Generic persistence FAILED: " + ex.Message); }
+                    } catch { }
                 }
 
                 if (!contentSet) {

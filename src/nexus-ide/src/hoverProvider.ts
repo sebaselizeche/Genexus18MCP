@@ -12,6 +12,22 @@ export class GxHoverProvider implements vscode.HoverProvider {
         const range = document.getWordRangeAtPosition(position);
         if (!range) return undefined;
         const word = document.getText(range);
+        
+        // 0. Detect comments - If word is in a comment, don't show any hover
+        const lineText = document.lineAt(position.line).text;
+        const commentIdx = lineText.indexOf('//');
+        if (commentIdx !== -1 && position.character >= commentIdx) {
+            return undefined;
+        }
+
+        const blockCommentStart = lineText.indexOf('/*');
+        if (blockCommentStart !== -1 && position.character >= blockCommentStart) {
+            // Simplified block comment detection for the same line
+            const blockCommentEnd = lineText.indexOf('*/', blockCommentStart);
+            if (blockCommentEnd === -1 || position.character <= blockCommentEnd + 1) {
+                return undefined;
+            }
+        }
 
         // Filter out keywords or very small words to avoid noise
         if (word.length < 3) return undefined;

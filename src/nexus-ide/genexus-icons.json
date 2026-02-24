@@ -1,14 +1,28 @@
 {
     "iconDefinitions": {
+        "module": { "iconPath": "./resources/module.svg" },
+        "folder": { "iconPath": "./resources/folder.svg" },
         "procedure": { "iconPath": "./resources/procedure.svg" },
         "transaction": { "iconPath": "./resources/transaction.svg" },
-        "webpanel": { "iconPath": "./resources/webpanel.svg" }
+        "webpanel": { "iconPath": "./resources/webpanel.svg" },
+        "sdt": { "iconPath": "./resources/sdt.svg" },
+        "dataprovider": { "iconPath": "./resources/dataprovider.svg" },
+        "dataview": { "iconPath": "./resources/dataview.svg" },
+        "attribute": { "iconPath": "./resources/attribute.svg" },
+        "table": { "iconPath": "./resources/table.svg" },
+        "sdpanel": { "iconPath": "./resources/sdpanel.svg" }
     },
     "file": "procedure",
-    "languageIds": {
-        "genexus": "procedure"
-    },
     "fileExtensions": {
-        "gx": "procedure"
+        "gx": "procedure",
+        "prc.gx": "procedure",
+        "trn.gx": "transaction",
+        "wp.gx": "webpanel",
+        "sdt.gx": "sdt",
+        "dp.gx": "dataprovider",
+        "dv.gx": "dataview",
+        "att.gx": "attribute",
+        "tab.gx": "table",
+        "sdp.gx": "sdpanel"
     }
 }

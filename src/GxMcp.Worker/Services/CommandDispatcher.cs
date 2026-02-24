@@ -86,7 +86,12 @@ namespace GxMcp.Worker.Services
                 string method = request["method"] != null ? request["method"].ToString() : null;
                 var @params = request["params"] as JObject ?? new JObject();
 
-                // ... (keep switch cases)
+                // DYNAMIC SHADOW PATH INJECTION (Transparent Integration)
+                if (@params["shadowPath"] != null)
+                {
+                    string sPath = @params["shadowPath"].ToString();
+                    Environment.SetEnvironmentVariable("GX_SHADOW_PATH", sPath);
+                }
 
                 if (method == "execute_command")
                 {
@@ -98,9 +103,11 @@ namespace GxMcp.Worker.Services
                     switch (module)
                     {
                         case "KB":
+                            Logger.Info($"KB Command: {action}");
                             if (action == "BulkIndex") return _kbService.BulkIndex();
                             if (action == "GetIndexStatus") return _kbService.GetIndexStatus();
                             if (action == "Initialize") return _kbService.GetKB() != null ? "{\"status\":\"Ready\"}" : "{\"error\":\"Failed to open KB\"}";
+                            if (action == "CreateObject") return _objectService.CreateObject(@params["type"]?.ToString(), @params["name"]?.ToString());
                             return "{\"error\": \"Action not found in KB\"}";
                         case "ListObjects":
                             return _searchService.Search(null, target, null, @params["limit"] != null ? (int)@params["limit"] : 100);
@@ -120,6 +127,7 @@ namespace GxMcp.Worker.Services
                             if (action == "GetHierarchy") return _analyzeService.GetHierarchy(target);
                             if (action == "GetDataContext") return _dataInsightService.GetDataContext(target);
                             if (action == "GetParameters") return _analyzeService.GetParameters(target);
+                            if (action == "ExplainCode") return _analyzeService.ExplainCode(target, payload);
                             return _analyzeService.Analyze(target);
                         case "UI":
                             if (action == "GetUIContext") return _uiService.GetUIContext(target);

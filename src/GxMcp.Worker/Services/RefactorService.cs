@@ -25,15 +25,26 @@ namespace GxMcp.Worker.Services
         public string Refactor(string target, string action, string payload)
         {
             try {
-                var data = JObject.Parse(payload);
-                string oldName = data["oldName"]?.ToString();
-                string newName = data["newName"]?.ToString();
+                string oldName = null;
+                string newName = null;
+
+                if (payload.Trim().StartsWith("{"))
+                {
+                    var data = JObject.Parse(payload);
+                    oldName = data["oldName"]?.ToString();
+                    newName = data["newName"]?.ToString();
+                }
+                else
+                {
+                    oldName = target;
+                    newName = payload;
+                }
 
                 if (action == "RenameVariable" || (oldName != null && oldName.StartsWith("&"))) {
                     return RenameVariable(target, oldName, newName);
                 }
                 
-                if (action == "RenameAttribute" || (oldName != null && !oldName.StartsWith("&"))) {
+                if (action == "RenameAttribute" || action == "RenameObject") {
                     return RenameAttribute(oldName, newName);
                 }
 

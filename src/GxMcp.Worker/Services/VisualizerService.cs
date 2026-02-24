@@ -134,17 +134,32 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
-                var graphData = new { nodes, edges };
-                string jsonGraph = JsonConvert.SerializeObject(graphData);
-
-                // Generate HTML
+                var jsonGraph = JsonConvert.SerializeObject(new { nodes, edges });
                 string html = GetHtmlTemplate(jsonGraph);
                 
                 if (!Directory.Exists(_outputDir)) Directory.CreateDirectory(_outputDir);
                 string filePath = Path.Combine(_outputDir, "graph.html");
                 File.WriteAllText(filePath, html);
 
-                return "{\"status\": \"Success\", \"url\": \"" + filePath.Replace("\\", "/") + "\", \"nodes\": " + nodes.Count + ", \"edges\": " + edges.Count + "}";
+                // Build Mermaid fallback
+                var mermaid = new StringBuilder();
+                mermaid.AppendLine("graph TD");
+                foreach (var node in nodes) {
+                    var n = (dynamic)node;
+                    mermaid.AppendLine(string.Format("  {0}[\"{1}\"]", n.data.id.Replace(" ", "_"), n.data.label));
+                }
+                foreach (var edge in edges) {
+                    var e = (dynamic)edge;
+                    mermaid.AppendLine(string.Format("  {0} --> {1}", e.data.source.Replace(" ", "_"), e.data.target.Replace(" ", "_")));
+                }
+
+                return new JObject { 
+                    ["status"] = "Success", 
+                    ["url"] = filePath.Replace("\\", "/"), 
+                    ["mermaid"] = mermaid.ToString(),
+                    ["nodes"] = nodes.Count, 
+                    ["edges"] = edges.Count 
+                }.ToString();
             }
             catch (Exception ex)
             {

@@ -20,6 +20,17 @@ namespace GxMcp.Worker
         static void Main(string[] args)
         {
             try {
+                // Use UTF-8 for communication with Gateway
+                // The SDK handles KB encoding internally.
+                Console.InputEncoding = System.Text.Encoding.UTF8;
+                Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+                // Ensure culture is Portuguese-Brazil for SDK character mapping
+                try {
+                    System.Threading.Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("pt-BR");
+                    System.Threading.Thread.CurrentThread.CurrentUICulture = new System.Globalization.CultureInfo("pt-BR");
+                } catch { }
+
                 AppDomain.CurrentDomain.UnhandledException += (s, e) => {
                     Logger.Error("FATAL: " + (e.ExceptionObject as Exception)?.Message);
                 };
@@ -98,7 +109,19 @@ namespace GxMcp.Worker
                 Logger.Debug($"Setting current directory to {gxPath}");
                 Directory.SetCurrentDirectory(gxPath);
                 
-                // 1. Initialize UI Services (Bridge mode)
+                // 1. Initialize Context and Services (Critical for KB.Open)
+                var archAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.Common.dll"));
+                var contextServiceType = archAsm.GetType("Artech.Architecture.Common.Services.ContextService");
+                contextServiceType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("ContextService Initialized.");
+
+                // Load BL Framework (Critical for implementations)
+                var blAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.BL.Framework.dll"));
+                var blCommonType = blAsm.GetType("Artech.Architecture.BL.Framework.Services.CommonServices");
+                blCommonType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("BL Framework CommonServices Initialized.");
+
+                // 2. Initialize UI Services (Bridge mode)
                 var uiAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.UI.Framework.dll"));
                 var uiType = uiAsm.GetType("Artech.Architecture.UI.Framework.Services.UIServices");
                 uiType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
@@ -117,7 +140,6 @@ namespace GxMcp.Worker
                 connType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
                 connType?.GetMethod("Start", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
                 
-                var archAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Artech.Architecture.Common.dll"));
                 var kbBaseType = archAsm.GetType("Artech.Architecture.Common.Objects.KnowledgeBase");
                 var factoryProp = kbBaseType?.GetProperty("KBFactory", BindingFlags.Public | BindingFlags.Static);
                 if (factoryProp != null) {

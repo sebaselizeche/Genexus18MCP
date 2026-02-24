@@ -12,8 +12,6 @@
   "activationEvents": [
     "onStartupFinished",
     "onFileSystem:genexus",
-    "onView:genexusExplorer",
-    "onLanguage:genexus",
     "workspaceContains:**/*.gx"
   ],
   "enabledApiProposals": [
@@ -26,7 +24,7 @@
         {
           "id": "genexus",
           "title": "GeneXus",
-          "icon": "$(database)"
+          "icon": "resources/genexus-logo.svg"
         }
       ]
     },
@@ -36,6 +34,11 @@
           "id": "genexusExplorer",
           "name": "KB Explorer",
           "icon": "$(file-submodule)"
+        },
+        {
+          "id": "genexusActions",
+          "name": "Action Center",
+          "icon": "$(rocket)"
         }
       ]
     },
@@ -83,10 +86,40 @@
         "category": "GeneXus"
       },
       {
+        "command": "nexus-ide.newObject",
+        "title": "GeneXus: New Object",
+        "category": "GeneXus",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nexus-ide.renameAttribute",
+        "title": "GeneXus: Rename Attribute (Global)",
+        "category": "GeneXus",
+        "icon": "$(edit)"
+      },
+      {
         "command": "nexus-ide.buildObject",
         "title": "GeneXus: Build with this only",
         "category": "GeneXus",
         "icon": "$(play)"
+      },
+      {
+        "command": "nexus-ide.rebuildAll",
+        "title": "GeneXus: Rebuild All",
+        "category": "GeneXus",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "nexus-ide.generateDiagram",
+        "title": "GeneXus: Generate Diagram (Mermaid)",
+        "category": "GeneXus",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "nexus-ide.autoFix",
+        "title": "GeneXus: Auto-Fix Build Errors (AI)",
+        "category": "GeneXus",
+        "icon": "$(beaker)"
       },
       {
         "command": "nexus-ide.refreshTree",
@@ -117,6 +150,11 @@
       {
         "command": "nexus-ide.switchPart.Layout",
         "title": "Layout"
+      },
+      {
+        "command": "nexus-ide.copyMcpConfig",
+        "title": "GeneXus: Copy MCP Config for Copilot/Claude",
+        "category": "GeneXus"
       }
     ],
     "menus": {
@@ -142,6 +180,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "nexus-ide.newObject",
+          "when": "view == genexusExplorer || view == genexusActions",
+          "group": "navigation"
+        },
         {
           "command": "nexus-ide.openKb",
           "when": "view == genexusExplorer",
@@ -180,6 +223,31 @@
           "when": "resourceScheme == genexus && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\//"
         }
       ]
+    },
+    "configuration": {
+      "title": "GeneXus Nexus IDE",
+      "properties": {
+        "genexus.kbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the GeneXus Knowledge Base."
+        },
+        "genexus.installationPath": {
+          "type": "string",
+          "default": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+          "description": "Path to the GeneXus 18 installation directory."
+        },
+        "genexus.mcpPort": {
+          "type": "number",
+          "default": 5000,
+          "description": "Port where the MCP Gateway will run."
+        },
+        "genexus.autoStartBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the MCP backend when the extension activates."
+        }
+      }
     }
   },
   "scripts": {

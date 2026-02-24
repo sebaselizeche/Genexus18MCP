@@ -61,7 +61,7 @@ namespace GxMcp.Worker.Services
                 CheckDynamicCall(cleanFullCode, issues);
 
                 // 5. New without When Duplicate (Info)
-                CheckNewWhenDuplicate(cleanFullCode, issues);
+                CheckNewWhenDuplicate(cleanFullCode, issues, fullCode);
 
                 // 6. Undeclared Variables (Critical)
                 CheckVariableUsage(cleanFullCode, obj, issues, fullCode);
@@ -115,7 +115,7 @@ namespace GxMcp.Worker.Services
         private string StripComments(string code)
         {
             var blockComments = @"/\*(.*?)\*/";
-            var lineComments = @"//(.*?)\r?\n";
+            var lineComments = @"//(.*?)(?:\r?\n|$)";
             var strings = @"""((\\[^\n]|[^""\n])*)""|'((\\[^\n]|[^'\n])*)'";
             
             return Regex.Replace(code, blockComments + "|" + lineComments + "|" + strings, 
@@ -171,14 +171,15 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private void CheckNewWhenDuplicate(string code, JArray issues)
+        private void CheckNewWhenDuplicate(string code, JArray issues, string originalCode)
         {
             var newBlocks = Regex.Matches(code, @"(?is)\bnew\b.*?\bendnew\b", RegexOptions.Compiled);
             foreach (Match m in newBlocks)
             {
                 if (!Regex.IsMatch(m.Value, @"(?i)\bwhen\s+duplicate\b", RegexOptions.Compiled))
                 {
-                    issues.Add(CreateIssue("GX005", "New without When Duplicate", "Info", "Consider adding 'when duplicate' to handle unique index collisions gracefully.", m.Value));
+                    int line = GetLineNumber(originalCode, m.Index);
+                    issues.Add(CreateIssue("GX005", "New without When Duplicate", "Info", "Consider adding 'when duplicate' to handle unique index collisions gracefully.", m.Value, line));
                 }
             }
         }
@@ -197,7 +198,7 @@ namespace GxMcp.Worker.Services
 
             // Standard GeneXus predefined variables
             var standardVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-                "Pgmname", "Pgmdesc", "Mode", "Time", "Today", "UserId", "Output_file"
+                "Pgmname", "Pgmdesc", "Mode", "Time", "Today", "UserId", "Output", "Page", "Line", "ReturnCode"
             };
 
             // Match all &identifiers
@@ -217,11 +218,17 @@ namespace GxMcp.Worker.Services
             }
 
             // Flag Unused Variables
+            string varContent = VariableInjector.GetVariablesAsText(obj);
             foreach (var kvp in declaredVars)
             {
-                if (!kvp.Value)
+                if (!kvp.Value && !standardVars.Contains(kvp.Key))
                 {
-                    issues.Add(CreateIssue("GX008", "Unused variable", "Warning", $"Variable '&{kvp.Key}' is defined but never used in the code.", "&" + kvp.Key));
+                    // Find the definition line for the unused variable in the Variables view
+                    int line = 0;
+                    var defMatch = Regex.Match(varContent, @"(?i)\b" + Regex.Escape(kvp.Key) + @"\b", RegexOptions.Compiled);
+                    if (defMatch.Success) line = GetLineNumber(varContent, defMatch.Index);
+                    
+                    issues.Add(CreateIssue("GX008", "Unused variable", "Warning", $"Variable '&{kvp.Key}' is defined but never used in the code.", "&" + kvp.Key, line));
                 }
             }
         }
@@ -276,6 +283,11 @@ namespace GxMcp.Worker.Services
             issue["description"] = description;
             issue["line"] = line;
             issue["snippet"] = snippet.Length > 200 ? snippet.Substring(0, 197).Trim() + "..." : snippet.Trim();
+            
+            // Tag issues by Part
+            if (id == "GX008") issue["part"] = "Variables";
+            else issue["part"] = "Logic";
+
             return issue;
         }
     }

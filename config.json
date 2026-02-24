@@ -12,6 +12,7 @@
         "Path": "logs"
     },
     "Environment": {
-        "KBPath": "C:\\KBs\\academicoLocal"
+        "KBPath": "C:\\KBs\\academicoLocal",
+        "GX_SHADOW_PATH": "c:\\Projetos\\GenexusMCP\\.gx_mirror"
     }
 }

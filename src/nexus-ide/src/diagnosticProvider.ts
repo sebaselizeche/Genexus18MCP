@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
+import { GxFileSystemProvider } from './gxFileSystem';
 
 export class GxDiagnosticProvider {
     private diagnosticCollection: vscode.DiagnosticCollection;
 
-    constructor(private readonly callGateway: (cmd: any) => Promise<any>) {
+    constructor(
+        private readonly callGateway: (cmd: any) => Promise<any>,
+        private readonly fsProvider: GxFileSystemProvider
+    ) {
         this.diagnosticCollection = vscode.languages.createDiagnosticCollection('genexus');
     }
 
@@ -19,7 +23,16 @@ export class GxDiagnosticProvider {
 
             if (result && result.issues) {
                 const diagnostics: vscode.Diagnostic[] = [];
+                const currentPart = this.getPartName(document.uri);
+
                 for (const issue of result.issues) {
+                    // Logic filtering: Only show relevant diagnostics for the current part
+                    if (currentPart === 'Variables') {
+                        if (issue.part !== 'Variables') continue;
+                    } else if (['Source', 'Rules', 'Events'].includes(currentPart)) {
+                        if (issue.part !== 'Logic') continue;
+                    }
+
                     const line = Math.max(0, (issue.line || 1) - 1);
                     const range = new vscode.Range(line, 0, line, 100); // Default to whole line if range unknown
                     
@@ -56,6 +69,10 @@ export class GxDiagnosticProvider {
     private getObjName(document: vscode.TextDocument): string {
         const path = decodeURIComponent(document.uri.path.substring(1));
         return path.split('/').pop()!.replace('.gx', '');
+    }
+
+    private getPartName(uri: vscode.Uri): string {
+        return this.fsProvider.getPart(uri);
     }
 
     public subscribeToEvents(context: vscode.ExtensionContext): void {

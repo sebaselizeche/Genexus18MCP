@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
+import { TYPE_SUFFIX } from './gxFileSystem';
 
 // Sort priority inside any folder: Module → Folder → everything else (alphabetical within groups)
 const TYPE_ORDER: Record<string, number> = {
@@ -56,9 +56,10 @@ export class GxTreeItem extends vscode.TreeItem {
         }
 
         if (!isContainer) {
-            // File item: set resourceUri for the genexus:// virtual filesystem and open command
+            // File item: set resourceUri with descriptive suffix
+            const suffix = TYPE_SUFFIX[gxType] ? `.${TYPE_SUFFIX[gxType]}` : '';
             this.resourceUri = vscode.Uri.parse(
-                `genexus:/${gxParentPath ? gxParentPath + '/' : ''}${gxName}.gx`
+                `genexus:/${gxParentPath ? gxParentPath + '/' : ''}${gxName}${suffix}.gx`
             );
             this.command = {
                 command: 'vscode.open',
