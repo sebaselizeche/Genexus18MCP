@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 using System.Reflection;
+using System.Text;
 
 namespace GxMcp.Worker.Services
 {
@@ -223,10 +224,17 @@ namespace GxMcp.Worker.Services
                         transaction.Commit();
                         Logger.Info("[DEBUG-SAVE] SDK Transaction Committed.");
                     }
-                    catch (Exception ex) {
-                        Logger.Error("[DEBUG-SAVE] Transaction Error: " + ex.Message);
+                    catch (Exception ex)
+                    {
+                        var issues = SdkDiagnosticsHelper.GetDiagnostics(obj);
+                        var detailedError = GetDetailedSdkError(obj, ex);
                         transaction.Rollback();
-                        throw;
+
+                        var errorRes = new JObject();
+                        errorRes["status"] = "Error";
+                        errorRes["error"] = detailedError;
+                        errorRes["issues"] = issues;
+                        return errorRes.ToString();
                     }
 
                     _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
@@ -335,6 +343,39 @@ namespace GxMcp.Worker.Services
             }
 
             return ObjectService.GetPartGuid(p);
+        }
+
+        private string GetDetailedSdkError(object obj, Exception originalEx)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("SDK Save Error: " + originalEx.Message);
+
+            try
+            {
+                var messagesProp = obj.GetType().GetProperty("Messages", BindingFlags.Public | BindingFlags.Instance);
+                if (messagesProp != null)
+                {
+                    var messages = messagesProp.GetValue(obj) as System.Collections.IEnumerable;
+                    if (messages != null)
+                    {
+                        bool foundMessages = false;
+                        foreach (var msg in messages)
+                        {
+                            string msgStr = msg.ToString();
+                            sb.AppendLine(" - " + msgStr);
+                            Logger.Error("[DEBUG-SAVE] SDK Message: " + msgStr);
+                            foundMessages = true;
+                        }
+                        if (!foundMessages) sb.AppendLine(" (No specific SDK messages found)");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Error extracting SDK messages: " + ex.Message);
+            }
+
+            return sb.ToString().Trim();
         }
     }
 }

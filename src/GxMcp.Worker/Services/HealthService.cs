@@ -17,6 +17,11 @@ namespace GxMcp.Worker.Services
             _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
         }
 
+        public string Ping()
+        {
+            return "{\"status\": \"Ready\", \"timestamp\": \"" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "\"}";
+        }
+
         public string GetHealthReport()
         {
             try

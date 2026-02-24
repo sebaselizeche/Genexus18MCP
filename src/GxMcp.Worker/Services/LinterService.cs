@@ -72,7 +72,8 @@ namespace GxMcp.Worker.Services
                 }
 
                 // 9. SDK NATIVE VALIDATION (Always run for the whole object)
-                CheckNativeSDK(obj, issues);
+                var sdkIssues = SdkDiagnosticsHelper.GetDiagnostics(obj);
+                foreach (var issue in sdkIssues) issues.Add(issue);
 
                 var result = new JObject();
                 result["target"] = target;
@@ -171,12 +172,20 @@ namespace GxMcp.Worker.Services
             
             string cleanAllCode = StripComments(allCode);
 
+            // OPTIMIZATION: Extract all used variable names once (O(N+M))
+            var usedVariables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var matches = Regex.Matches(cleanAllCode, @"&(\w+)\b", RegexOptions.IgnoreCase);
+            foreach (Match m in matches)
+            {
+                usedVariables.Add(m.Groups[1].Value);
+            }
+
             foreach (var v in varPart.Variables)
             {
                 if (new[] { "Pgmname", "Pgmdesc", "Mode", "Time", "Today", "UserId", "Output", "Page", "Line", "ReturnCode" }
                     .Contains(v.Name, StringComparer.OrdinalIgnoreCase)) continue;
 
-                if (!Regex.IsMatch(cleanAllCode, @"&" + Regex.Escape(v.Name) + @"\b", RegexOptions.IgnoreCase))
+                if (!usedVariables.Contains(v.Name))
                 {
                     int line = 0;
                     var defMatch = Regex.Match(varContent, @"(?i)\b" + Regex.Escape(v.Name) + @"\b", RegexOptions.Compiled);
@@ -258,43 +267,6 @@ namespace GxMcp.Worker.Services
             return line;
         }
 
-        private void CheckNativeSDK(KBObject obj, JArray issues)
-        {
-            try
-            {
-                var output = new global::Artech.Common.Diagnostics.OutputMessages();
-                obj.Validate(output);
-
-                foreach (var msg in output.OnlyMessages)
-                {
-                    if (msg is global::Artech.Common.Diagnostics.OutputError error)
-                    {
-                        int line = 1;
-                        int column = 1;
-                        // Determina a part lógica baseada no tipo de objeto
-                        string part = (obj is Procedure) ? "Source" : ((obj is WebPanel) ? "Events" : "Logic");
-
-                        if (error.Position is global::Artech.Common.Location.TextPosition textPos)
-                        {
-                            line = textPos.Line;
-                            column = textPos.Char;
-                        }
-
-                        string severity = "Information";
-                        if (error.Level == global::Artech.Common.Diagnostics.MessageLevel.Error) severity = "Error";
-                        else if (error.Level == global::Artech.Common.Diagnostics.MessageLevel.Warning) severity = "Warning";
-
-                        var issue = CreateIssue(error.ErrorCode, "SDK Validation", severity, error.Text, "", line, part);
-                        issue["column"] = column;
-                        issues.Add(issue);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("Native SDK Validation failed: " + ex.Message);
-            }
-        }
 
         private JObject CreateIssue(string id, string title, string severity, string description, string snippet, int line, string part)
         {

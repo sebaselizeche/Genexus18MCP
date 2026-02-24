@@ -8,6 +8,28 @@ namespace GxMcp.Worker.Helpers
         private static readonly string LogFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "worker_debug.log");
         private static readonly object LockObj = new object();
 
+        static Logger()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    if (File.Exists(LogFile))
+                    {
+                        string prevLog = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "worker_debug.prev.log");
+                        if (File.Exists(prevLog)) File.Delete(prevLog);
+                        File.Move(LogFile, prevLog);
+                        break;
+                    }
+                }
+                catch 
+                { 
+                    if (i == 2) break;
+                    System.Threading.Thread.Sleep(100); 
+                }
+            }
+        }
+
         public static void Info(string message) => Log("INFO", message);
         public static void Warn(string message) => Log("WARN", message);
         public static void Error(string message) => Log("ERROR", message);

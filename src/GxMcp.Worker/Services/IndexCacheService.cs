@@ -16,6 +16,7 @@ namespace GxMcp.Worker.Services
         private bool _initialized = false;
         private readonly object _lock = new object();
         private bool _savingInProgress = false;
+        private string _lastSavedJsonHash = null;
 
         public IndexCacheService(BuildService buildService)
         {
@@ -49,6 +50,9 @@ namespace GxMcp.Worker.Services
                 _indexPath = Path.Combine(cacheDir, string.Format("index_{0}.json", hash));
                 _initialized = true;
                 Logger.Info(string.Format("IndexCache initialized: {0}", _indexPath));
+
+                // PERFORMANCE: Pro-active loading in background
+                Task.Run(() => GetIndex());
             }
             catch (Exception ex) { Logger.Error("IndexCache Init Error: " + ex.Message); }
         }
@@ -67,15 +71,24 @@ namespace GxMcp.Worker.Services
             var byParent = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in index.Objects.Values)
             {
-                string parent = entry.Parent ?? "";
-                if (!byParent.TryGetValue(parent, out var list))
-                {
-                    list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
-                    byParent[parent] = list;
-                }
-                list.Add(entry);
+                AddOrUpdateEntryInParentIndex(byParent, entry);
             }
             index.ChildrenByParent = byParent;
+        }
+
+        private void AddOrUpdateEntryInParentIndex(System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
+        {
+            string parent = entry.Parent ?? "";
+            if (!byParent.TryGetValue(parent, out var list))
+            {
+                list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
+                byParent[parent] = list;
+            }
+            // Evitar duplicatas em atualizações incrementais
+            if (!list.Any(e => e.Name == entry.Name && e.Type == entry.Type))
+            {
+                list.Add(entry);
+            }
         }
 
         public SearchIndex GetIndex()
@@ -106,8 +119,11 @@ namespace GxMcp.Worker.Services
 
         public void UpdateIndex(SearchIndex index)
         {
-            BuildParentIndex(index);
-            _index = index;
+            lock (_lock)
+            {
+                BuildParentIndex(index);
+                _index = index;
+            }
             // Fire and forget save to disk
             Task.Run(() => FlushToDisk());
         }
@@ -129,11 +145,22 @@ namespace GxMcp.Worker.Services
                         DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore
                     };
                     string json = Newtonsoft.Json.JsonConvert.SerializeObject(_index, settings);
+                    
                     File.WriteAllText(_indexPath, json);
+                    _lastSavedJsonHash = GetJsonHash(json);
                     Logger.Debug("Index flushed to disk (Background)");
                 }
                 catch (Exception ex) { Logger.Error("Flush Error: " + ex.Message); }
                 finally { _savingInProgress = false; }
+            }
+        }
+
+        private string GetJsonHash(string json)
+        {
+            using (var md5 = System.Security.Cryptography.MD5.Create())
+            {
+                var bytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(json));
+                return BitConverter.ToString(bytes).Replace("-", "");
             }
         }
 
@@ -206,10 +233,25 @@ namespace GxMcp.Worker.Services
             string key = string.Format("{0}:{1}", entry.Type, entry.Name);
             lock (_lock)
             {
+                // Incremental update of Parent Index to avoid O(N) rebuild
+                if (index.ChildrenByParent != null)
+                {
+                    // Remove old entry from parent index if it exists and changed parents
+                    if (index.Objects.TryGetValue(key, out var oldEntry) && oldEntry.Parent != entry.Parent)
+                    {
+                        string oldParent = oldEntry.Parent ?? "";
+                        if (index.ChildrenByParent.TryGetValue(oldParent, out var oldList))
+                            oldList.RemoveAll(e => e.Name == entry.Name && e.Type == entry.Type);
+                    }
+                    AddOrUpdateEntryInParentIndex(index.ChildrenByParent, entry);
+                }
+
                 if (index.Objects.ContainsKey(key)) index.Objects[key] = entry;
                 else index.Objects.Add(key, entry);
             }
-            UpdateIndex(index);
+            
+            // Fire and forget save to disk
+            Task.Run(() => FlushToDisk());
         }
 
         public void RemoveEntry(string type, string name)

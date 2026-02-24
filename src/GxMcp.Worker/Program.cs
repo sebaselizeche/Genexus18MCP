@@ -13,7 +13,8 @@ namespace GxMcp.Worker
 {
     class Program
     {
-        private static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>();
+        public static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>();
+        public static readonly ConcurrentQueue<Action> BackgroundQueue = new ConcurrentQueue<Action>();
         private static CommandDispatcher _dispatcher;
 
         [STAThread]
@@ -32,7 +33,12 @@ namespace GxMcp.Worker
                 } catch { }
 
                 AppDomain.CurrentDomain.UnhandledException += (s, e) => {
-                    Logger.Error("FATAL: " + (e.ExceptionObject as Exception)?.Message);
+                    Logger.Error("FATAL UNHANDLED EXCEPTION: " + (e.ExceptionObject as Exception)?.ToString());
+                };
+
+                System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, e) => {
+                    Logger.Error("UNOBSERVED TASK EXCEPTION: " + e.Exception?.ToString());
+                    e.SetObserved();
                 };
 
                 Console.WriteLine("WORKER_HANDSHAKE_START");
@@ -94,9 +100,28 @@ namespace GxMcp.Worker
                 }) { IsBackground = true, Name = "HeartbeatReader" };
                 readerThread.Start();
 
-                foreach (string line in CommandQueue.GetConsumingEnumerable())
+                while (!CommandQueue.IsCompleted)
                 {
-                    ProcessCommand(line);
+                    if (CommandQueue.TryTake(out string line, 50))
+                    {
+                        if (_dispatcher.IsThreadSafe(line))
+                        {
+                            System.Threading.Tasks.Task.Run(() => ProcessCommand(line));
+                        }
+                        else
+                        {
+                            ProcessCommand(line);
+                        }
+                    }
+                    else
+                    {
+                        // Process ONE background task when idle
+                        if (BackgroundQueue.TryDequeue(out var action))
+                        {
+                            try { action(); }
+                            catch (Exception ex) { Logger.Error("Background Task Error: " + ex.Message); }
+                        }
+                    }
                 }
             } catch (Exception ex) {
                 Logger.Error($"Main FATAL: {ex.Message}");

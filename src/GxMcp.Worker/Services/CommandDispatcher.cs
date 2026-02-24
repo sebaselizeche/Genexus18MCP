@@ -78,6 +78,24 @@ namespace GxMcp.Worker.Services
 
         public KbService GetKbService() { return _kbService; }
 
+        public bool IsThreadSafe(string line)
+        {
+            try
+            {
+                var request = JObject.Parse(line);
+                string method = request["method"] != null ? request["method"].ToString() : null;
+                var @params = request["params"] as JObject ?? new JObject();
+
+                if (method == "execute_command")
+                {
+                    string module = @params["module"] != null ? @params["module"].ToString() : null;
+                    if (module == "Health" || module == "Search" || module == "ListObjects") return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
         public string Dispatch(string line)
         {
             LastRequest = line;
@@ -108,7 +126,11 @@ namespace GxMcp.Worker.Services
                             Logger.Info($"KB Command: {action}");
                             if (action == "BulkIndex") return _kbService.BulkIndex();
                             if (action == "GetIndexStatus") return _kbService.GetIndexStatus();
-                            if (action == "Initialize") return _kbService.GetKB() != null ? "{\"status\":\"Ready\"}" : "{\"error\":\"Failed to open KB\"}";
+                            if (action == "Initialize") {
+                                if (_kbService.GetKB() != null) return "{\"status\":\"Ready\"}";
+                                if (_kbService.IsInitializing) return "{\"status\":\"Initializing\"}";
+                                return "{\"error\":\"Failed to open KB\"}";
+                            }
                             if (action == "CreateObject") return _objectService.CreateObject(@params["type"]?.ToString(), @params["name"]?.ToString());
                             return "{\"error\": \"Action not found in KB\"}";
                         case "ListObjects":
@@ -144,7 +166,9 @@ namespace GxMcp.Worker.Services
                         case "Linter":
                             string linterPart = @params["part"] != null ? @params["part"].ToString() : null;
                             return _linterService.Lint(target, linterPart);
-                        case "Health": return _healthService.GetHealthReport();
+                        case "Health": 
+                            if (action == "Ping") return _healthService.Ping();
+                            return _healthService.GetHealthReport();
                         case "Pattern": return _patternService.GetSample(target);
                         case "Patch": return _patchService.ApplyPatch(
                             target, 

@@ -19,9 +19,36 @@ namespace GxMcp.Gateway
         private static ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingRequests = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
         private static readonly string _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "gateway_debug.log");
 
+        private static void InitializeLogging()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    if (File.Exists(_logPath))
+                    {
+                        string prevLog = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "gateway_debug.prev.log");
+                        if (File.Exists(prevLog)) File.Delete(prevLog);
+                        File.Move(_logPath, prevLog);
+                        break;
+                    }
+                }
+                catch 
+                { 
+                    if (i == 2) break;
+                    System.Threading.Thread.Sleep(100); 
+                }
+            }
+            
+            Log("=== Gateway starting (Stdio Mode) ===");
+        }
+
         public static void Log(string msg)
         {
-            try { File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n"); }
+            try { 
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                File.AppendAllText(_logPath, $"[{timestamp}] {msg}\n"); 
+            }
             catch { }
         }
 
@@ -30,9 +57,19 @@ namespace GxMcp.Gateway
             // Register encoding provider for Windows-1252 support in .NET 8
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
-            Console.Error.WriteLine("=== Gateway starting (Stdio Mode) ===");
-            Log("=== Gateway starting (Stdio Mode) ===");
+            InitializeLogging();
 
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+                Log("FATAL UNHANDLED EXCEPTION: " + (e.ExceptionObject as Exception)?.ToString());
+            };
+
+            TaskScheduler.UnobservedTaskException += (s, e) => {
+                Log("UNOBSERVED TASK EXCEPTION: " + e.Exception?.ToString());
+                e.SetObserved();
+            };
+
+            Console.Error.WriteLine("=== Gateway starting (Stdio Mode) ===");
+            
             var config = Configuration.Load();
             _worker = new WorkerProcess(config);
             _worker.OnRpcResponse += HandleWorkerResponse;

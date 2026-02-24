@@ -74,12 +74,18 @@ namespace GxMcp.Gateway
             _process.OutputDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data)) {
                     if (e.Data.TrimStart().StartsWith("{") && e.Data.Contains("\"jsonrpc\"")) OnRpcResponse?.Invoke(e.Data);
-                    else Console.Error.WriteLine($"[Worker] {e.Data}");
+                    else {
+                        Console.Error.WriteLine($"[Worker] {e.Data}");
+                        Program.Log($"[Worker-Out] {e.Data}");
+                    }
                 }
             };
             
             _process.ErrorDataReceived += (sender, e) => {
-                if (!string.IsNullOrEmpty(e.Data)) Console.Error.WriteLine(e.Data);
+                if (!string.IsNullOrEmpty(e.Data)) {
+                    Console.Error.WriteLine($"[Worker-Err] {e.Data}");
+                    Program.Log($"[Worker-Err] {e.Data}");
+                }
             };
 
             _process.Start();

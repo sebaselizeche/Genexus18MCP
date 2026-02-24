@@ -76,13 +76,63 @@ export class GxDiagnosticProvider {
                     diagnostic.source = 'GeneXus LSP (Elite)';
                     diagnostics.push(diagnostic);
                 }
-                this.diagnosticCollection.set(document.uri, diagnostics);
+                this.setDiagnostics(document, result.issues);
             } else {
                 this.diagnosticCollection.delete(document.uri);
             }
         } catch (e) {
             console.error("[Nexus IDE] Diagnostic error:", e);
         }
+    }
+
+    public setDiagnostics(document: vscode.TextDocument, issues: any[]): void {
+        const diagnostics: vscode.Diagnostic[] = [];
+        const currentPart = this.getPartName(document.uri);
+
+        for (const issue of issues) {
+            // Re-apply the part filter logic
+            if (currentPart === 'Variables') {
+                if (issue.part !== 'Variables') continue;
+            } else {
+                if (issue.part === 'Variables') continue;
+                if (issue.part !== currentPart && issue.part !== 'Logic') {
+                    if (!(currentPart === 'Source' && issue.part === 'Procedure') && 
+                        !(currentPart === 'Procedure' && issue.part === 'Source')) {
+                        continue;
+                    }
+                }
+            }
+
+            const line = Math.max(0, (issue.line || 1) - 1);
+            const col = Math.max(0, (issue.column || 1) - 1);
+            
+            let range: vscode.Range;
+            if (issue.snippet && issue.snippet.length > 0) {
+                range = new vscode.Range(line, col, line, col + issue.snippet.length);
+            } else {
+                try {
+                    const docLine = document.lineAt(line).text;
+                    const wordRange = document.getWordRangeAtPosition(new vscode.Position(line, col));
+                    if (wordRange) {
+                        range = wordRange;
+                    } else {
+                        range = new vscode.Range(line, col, line, col + 1);
+                    }
+                } catch {
+                    range = new vscode.Range(line, col, line, col + 1);
+                }
+            }
+            
+            let severity = vscode.DiagnosticSeverity.Information;
+            if (issue.severity === 'Critical' || issue.severity === 'Error') severity = vscode.DiagnosticSeverity.Error;
+            else if (issue.severity === 'Warning') severity = vscode.DiagnosticSeverity.Warning;
+
+            const diagnostic = new vscode.Diagnostic(range, issue.description, severity);
+            diagnostic.code = issue.code;
+            diagnostic.source = 'GeneXus LSP (Elite)';
+            diagnostics.push(diagnostic);
+        }
+        this.diagnosticCollection.set(document.uri, diagnostics);
     }
 
     public async refreshAll(): Promise<void> {

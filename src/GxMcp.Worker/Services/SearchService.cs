@@ -34,8 +34,27 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrEmpty(typeFilter)) criteria.TypeFilter = typeFilter;
                 if (!string.IsNullOrEmpty(domainFilter)) criteria.DomainFilter = domainFilter;
 
-                // PLINQ Search: Ultra fast scan of 37k+ objects
-                var queryResults = index.Objects.Values.AsParallel();
+                IEnumerable<SearchIndex.IndexEntry> sourceSet = null;
+
+                // PERFORMANCE CRITICAL: If searching by parent, use the specialized index
+                if (!string.IsNullOrEmpty(criteria.ParentFilter) && index.ChildrenByParent != null)
+                {
+                    if (index.ChildrenByParent.TryGetValue(criteria.ParentFilter, out var children))
+                    {
+                        sourceSet = children;
+                    }
+                    else
+                    {
+                        sourceSet = Enumerable.Empty<SearchIndex.IndexEntry>();
+                    }
+                }
+                else
+                {
+                    sourceSet = index.Objects.Values;
+                }
+
+                // PLINQ Search: Ultra fast scan
+                var queryResults = sourceSet.AsParallel();
 
                 // 1. Apply Hard Filters
                 if (!string.IsNullOrEmpty(criteria.TypeFilter))
@@ -44,7 +63,8 @@ namespace GxMcp.Worker.Services
                 if (!string.IsNullOrEmpty(criteria.DomainFilter))
                     queryResults = queryResults.Where(e => string.Equals(e.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase));
 
-                if (!string.IsNullOrEmpty(criteria.ParentFilter))
+                // Parent filter is already applied if we used the specialized index, but double check for non-indexed cases
+                if (!string.IsNullOrEmpty(criteria.ParentFilter) && (sourceSet == index.Objects.Values))
                     queryResults = queryResults.Where(e => string.Equals(e.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase));
 
                 // 2. Apply Semantic Filters (usedby:)

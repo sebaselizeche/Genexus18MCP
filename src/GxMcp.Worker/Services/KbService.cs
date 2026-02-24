@@ -19,6 +19,7 @@ namespace GxMcp.Worker.Services
         private static string _currentStatus = "";
 
         private static dynamic _kb;
+        private static bool _isOpenInProgress = false;
         private static readonly object _kbLock = new object();
 
         public KbService(BuildService buildService, IndexCacheService indexCacheService)
@@ -32,28 +33,19 @@ namespace GxMcp.Worker.Services
             return _indexCacheService;
         }
 
+        public bool IsInitializing => _isOpenInProgress;
+
         public dynamic GetKB()
         {
             lock (_kbLock) 
             { 
-                if (_kb == null)
+                if (_kb == null && !_isOpenInProgress)
                 {
                     string kbPath = Environment.GetEnvironmentVariable("GX_KB_PATH");
                     if (!string.IsNullOrEmpty(kbPath))
                     {
-                        try 
-                        { 
-                            Logger.Info($"Auto-opening KB from environment: {kbPath}");
-                            OpenKB(kbPath); 
-                        } 
-                        catch (Exception ex) 
-                        { 
-                            Logger.Error($"Auto-open failed: {ex.Message}");
-                        }
-                    }
-                    else
-                    {
-                        Logger.Warn("GX_KB_PATH environment variable is empty.");
+                        Logger.Info($"Auto-opening KB in background: {kbPath}");
+                        System.Threading.Tasks.Task.Run(() => OpenKB(kbPath));
                     }
                 }
                 return _kb; 
@@ -64,9 +56,12 @@ namespace GxMcp.Worker.Services
         {
             lock (_kbLock)
             {
+                if (_isOpenInProgress) return;
+                _isOpenInProgress = true;
+                
                 if (_kb != null)
                 {
-                    try { if (string.Equals(_kb.Location, path, StringComparison.OrdinalIgnoreCase)) return; } catch { }
+                    try { if (string.Equals(_kb.Location, path, StringComparison.OrdinalIgnoreCase)) { _isOpenInProgress = false; return; } } catch { }
                     try { _kb.Close(); } catch { }
                 }
 
@@ -77,16 +72,15 @@ namespace GxMcp.Worker.Services
                         string kbDir = Path.GetDirectoryName(path);
                         Directory.SetCurrentDirectory(kbDir);
                         
-                        // Use direct call with OpenOptions for stability
                         var options = new global::Artech.Architecture.Common.Objects.KnowledgeBase.OpenOptions(path);
-                        
                         _kb = global::Artech.Architecture.Common.Objects.KnowledgeBase.Open(options);
                         
-                        Logger.Info($"KB opened successfully. DesignModel: {_kb.DesignModel.Name}");
-                    } finally { Directory.SetCurrentDirectory(oldDir); }
+                        Logger.Info($"KB opened successfully.");
+                    } finally { Directory.SetCurrentDirectory(oldDir); _isOpenInProgress = false; }
                 } catch (Exception ex) { 
                     Logger.Error($"ERROR opening KB: {ex.Message}");
                     _kb = null;
+                    _isOpenInProgress = false;
                     throw;
                 }
             }
@@ -97,139 +91,155 @@ namespace GxMcp.Worker.Services
             Logger.Info("BulkIndex() requested.");
             if (_isIndexing) return "{\"status\":\"Already in progress\"}";
 
-            System.Threading.Tasks.Task.Run(() => {
-                try
-                {
+            // Use the BackgroundQueue to ensure STA safety and allow interactivity
+            Program.BackgroundQueue.Enqueue(() => {
+                try {
                     dynamic kb = GetKB();
                     if (kb == null) { _isIndexing = false; return; }
                     
-                    Logger.Info("Bulk Indexing starting...");
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    
+                    Logger.Info("Bulk Indexing starting (STA-Safe)...");
                     _isIndexing = true;
                     _processedCount = 0;
                     _currentStatus = "Gathering objects...";
-                    string shadowPath = Environment.GetEnvironmentVariable("GX_SHADOW_PATH");
-                    if (!string.IsNullOrEmpty(shadowPath)) {
-                        if (!Directory.Exists(shadowPath)) Directory.CreateDirectory(shadowPath);
-                        File.WriteAllText(Path.Combine(shadowPath, "sync_test.txt"), "Shadow Sync Active at " + DateTime.Now.ToString());
-                    }
 
                     var objects = new List<global::Artech.Architecture.Common.Objects.KBObject>();
-                    try {
-                        foreach (global::Artech.Architecture.Common.Objects.KBObject obj in kb.DesignModel.Objects.GetAll()) {
-                            objects.Add(obj);
-                        }
-                        Logger.Info($"Gathering complete: {objects.Count} objects found.");
-                    } catch (Exception ex) { Logger.Error("Gather error: " + ex.Message); }
-
+                    foreach (global::Artech.Architecture.Common.Objects.KBObject obj in kb.DesignModel.Objects.GetAll()) {
+                        objects.Add(obj);
+                    }
                     _totalCount = objects.Count;
-                    int processed = 0;
-
+                    
                     var index = new SearchIndex { LastUpdated = DateTime.Now };
+                    _currentStatus = "Processing...";
 
-                    _currentStatus = "Processing objects...";
-                    foreach (dynamic obj in objects) {
+                    // Start the chunked indexing process
+                    ProcessIndexChunk(index, objects, 0);
+                } catch (Exception ex) {
+                    _isIndexing = false;
+                    Logger.Error("BulkIndex Initialization Fatal: " + ex.Message);
+                }
+            });
+
+            return "{\"status\":\"Started\"}";
+        }
+
+        private void ProcessIndexChunk(SearchIndex index, List<global::Artech.Architecture.Common.Objects.KBObject> objects, int startIndex)
+        {
+            const int chunkSize = 50;
+            int endIndex = Math.Min(startIndex + chunkSize, objects.Count);
+
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                var obj = objects[i];
+                try {
+                    // (Indexing logic from original BulkIndex...)
+                    string objType = obj.TypeDescriptor.Name;
+                    string objName = obj.Name;
+
+                    var entry = new SearchIndex.IndexEntry {
+                        Name = objName,
+                        Type = objType,
+                        Description = obj.Description
+                    };
+
+                    try {
+                        if (obj.Parent != null && obj.Parent.Guid != obj.Guid)
+                            entry.Parent = (obj.Parent.TypeDescriptor.Name == "DesignModel") ? "Root Module" : obj.Parent.Name;
+                        if (obj.Module != null && obj.Module.Guid != obj.Guid)
+                            entry.Module = obj.Module.Name;
+                    } catch { }
+
+                    bool isCoreType = objType == "Procedure" || objType == "WebPanel" || objType == "Transaction" || objType == "DataProvider" || objType == "SDT" || objType == "Attribute" || objType == "Table";
+                    if (isCoreType) {
+                        // Deep Indexing (DataType, Parm, etc.)
                         try {
-                            string objType = obj.TypeDescriptor.Name;
-                            string objName = obj.Name;
-
-                            var entry = new SearchIndex.IndexEntry {
-                                Name = objName,
-                                Type = objType,
-                                Description = obj.Description
-                            };
-
-                            // Fast Path: Parent & Module
-                            try {
-                                if (obj.Parent != null && obj.Parent.Guid != obj.Guid)
-                                    entry.Parent = (obj.Parent.TypeDescriptor.Name == "DesignModel") ? "Root Module" : obj.Parent.Name;
-                                if (obj.Module != null && obj.Module.Guid != obj.Guid)
-                                    entry.Module = obj.Module.Name;
-                            } catch { }
-
-                            // Deep Indexing ONLY for Core Types (Speedup: skip for Folders, Categories, etc.)
-                            bool isCoreType = objType == "Procedure" || objType == "WebPanel" || objType == "Transaction" || objType == "DataProvider" || objType == "SDT" || objType == "Attribute" || objType == "Table";
-
-                            if (isCoreType) {
-                                try {
-                                    if (objType == "Attribute") {
-                                        entry.DataType = obj.Type.ToString();
-                                        entry.Length = obj.Length;
-                                        entry.Decimals = obj.Decimals;
-                                    } else if (objType == "Table") {
-                                        entry.RootTable = objName;
-                                    }
-
-                                    // Extract Rules & Snippets (only for logic)
-                                    if (objType == "Procedure" || objType == "WebPanel" || objType == "DataProvider")
-                                    {
-                                        var rulesPart = obj.Parts.Get(Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534"));
-                                        if (rulesPart != null) {
-                                            string rSrc = rulesPart.Source;
-                                            var parmMatch = System.Text.RegularExpressions.Regex.Match(rSrc, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
-                                            if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
-                                        }
-
-                                        var sourcePart = obj.Parts.Get(Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f"));
-                                        if (sourcePart != null) {
-                                            string sSrc = sourcePart.Source;
-                                            if (!string.IsNullOrEmpty(sSrc)) {
-                                                entry.SourceSnippet = string.Join("\n", sSrc.Split('\n').Take(5)).Trim();
-                                            }
-                                        }
-                                    }
-                                } catch { }
-
-                                // SHADOW SYNC (Physical Dump) - Only for Core logic
-                                try {
-                                    if (!string.IsNullOrEmpty(shadowPath) && (objType == "Procedure" || objType == "WebPanel" || objType == "Transaction" || objType == "DataProvider"))
-                                    {
-                                        string typeDir = Path.Combine(shadowPath, objType);
-                                        if (!Directory.Exists(typeDir)) Directory.CreateDirectory(typeDir);
-
-                                        foreach (global::Artech.Architecture.Common.Objects.KBObjectPart part in obj.Parts) {
-                                            if (part is global::Artech.Architecture.Common.Objects.ISource sourcePart) {
-                                                string source = sourcePart.Source;
-                                                if (!string.IsNullOrEmpty(source)) {
-                                                    string partName = part.TypeDescriptor.Name;
-                                                    string fileName = (partName == "Source" || partName == "Events" || partName == "Structure") 
-                                                        ? string.Format("{0}.gx", objName) 
-                                                        : string.Format("{0}.{1}.gx", objName, partName);
-                                                    
-                                                    File.WriteAllText(Path.Combine(typeDir, fileName), source);
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (Exception shadowEx) { Logger.Error("Shadow Sync Error: " + shadowEx.Message); }
+                            if (objType == "Attribute" && obj is global::Artech.Genexus.Common.Objects.Attribute attr) {
+                                entry.DataType = attr.Type.ToString();
+                                entry.Length = attr.Length;
+                                entry.Decimals = attr.Decimals;
+                            } else if (objType == "Table") {
+                                entry.RootTable = objName;
                             }
 
-                            index.Objects[string.Format("{0}:{1}", entry.Type, entry.Name)] = entry;
-                            
-                            processed++;
-                            _processedCount = processed;
-                            if (processed % 1000 == 0) {
-                                Logger.Info(string.Format("Progress: {0}/{1} objects indexed...", processed, _totalCount));
+                            if (objType == "Procedure" || objType == "WebPanel" || objType == "DataProvider") {
+                                var rulesPart = obj.Parts.Get(Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534"));
+                                if (rulesPart != null) {
+                                    string rSrc = rulesPart.Source;
+                                    var parmMatch = System.Text.RegularExpressions.Regex.Match(rSrc, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
+                                    if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
+                                }
+                                var sourcePart = obj.Parts.Get(Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f"));
+                                if (sourcePart != null) {
+                                    string sSrc = sourcePart.Source;
+                                    if (!string.IsNullOrEmpty(sSrc)) 
+                                        entry.SourceSnippet = string.Join("\n", sSrc.Split('\n').Take(5)).Trim();
+                                }
                             }
                         } catch { }
                     }
 
-                    _indexCacheService.UpdateIndex(index);
-                    sw.Stop();
-                    _isIndexing = false;
-                    _processedCount = _totalCount;
-                    _currentStatus = "Complete";
-                    
-                    Logger.Info($"Bulk Indexing complete. {_totalCount} objects in {sw.ElapsedMilliseconds}ms.");
+                    index.Objects[string.Format("{0}:{1}", entry.Type, entry.Name)] = entry;
+                } catch { }
+            }
 
-                    // TRIGGER BACKGROUND REFERENCE CRAWLING (Incremental)
-                    System.Threading.Tasks.Task.Run(() => CrawlReferences(index, objects));
-                } catch (Exception ex) { 
-                    _isIndexing = false;
-                    Logger.Error($"BulkIndex Fatal: {ex.Message}");
-                }
-            });
+            _processedCount = endIndex;
+            if (endIndex % 1000 == 0 || endIndex == objects.Count) {
+                Logger.Info(string.Format("Indexing Progress: {0}/{1}", endIndex, objects.Count));
+            }
+
+            if (endIndex < objects.Count) {
+                // Yield to main loop by enqueuing the next chunk
+                Program.BackgroundQueue.Enqueue(() => ProcessIndexChunk(index, objects, endIndex));
+            } else {
+                // Finalize
+                _indexCacheService.UpdateIndex(index);
+                _isIndexing = false;
+                _currentStatus = "Complete";
+                Logger.Info("Bulk Indexing complete (Responsive).");
+                
+                // Trigger Crawling (also chunked)
+                Program.BackgroundQueue.Enqueue(() => ProcessCrawlChunk(index, objects, 0));
+            }
+        }
+
+        private void ProcessCrawlChunk(SearchIndex index, List<global::Artech.Architecture.Common.Objects.KBObject> objects, int startIndex)
+        {
+            const int chunkSize = 20;
+            int endIndex = Math.Min(startIndex + chunkSize, objects.Count);
+
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                var obj = objects[i];
+                try {
+                    string objType = obj.TypeDescriptor.Name;
+                    if (objType == "Procedure" || objType == "WebPanel" || objType == "Transaction" || objType == "DataProvider" || objType == "SDT") {
+                        string key = string.Format("{0}:{1}", objType, obj.Name);
+                        if (index.Objects.TryGetValue(key, out var entry)) {
+                            entry.Calls.Clear(); entry.Tables.Clear();
+                            foreach (dynamic reference in obj.GetReferences()) {
+                                try {
+                                    dynamic targetKey = reference.To;
+                                    string targetName = targetKey.Name;
+                                    if (string.IsNullOrEmpty(targetName)) targetName = targetKey.ToString();
+                                    string targetType = targetKey.TypeDescriptor.Name;
+                                    if (targetType == "Attribute" || targetType == "Table") {
+                                        if (!entry.Tables.Contains(targetName)) entry.Tables.Add(targetName);
+                                    } else {
+                                        if (!entry.Calls.Contains(targetName)) entry.Calls.Add(targetName);
+                                    }
+                                } catch { }
+                            }
+                        }
+                    }
+                } catch { }
+            }
+
+            if (endIndex < objects.Count) {
+                Program.BackgroundQueue.Enqueue(() => ProcessCrawlChunk(index, objects, endIndex));
+            } else {
+                _indexCacheService.UpdateIndex(index);
+                Logger.Info("Reference Crawling complete (Responsive).");
+            }
+        }
 
             return "{\"status\":\"Started\"}";
         }

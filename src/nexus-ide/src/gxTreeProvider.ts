@@ -138,15 +138,17 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
 
             this._cache.set(parentName, { items, time: Date.now() });
 
-            // --- ELITE PRE-FETCH ---
-            // Se acabamos de carregar a raiz (Root Module), disparamos o carregamento dos filhos
-            // das primeiras 5 pastas em background para navegação instantânea.
-            if (!element) {
-                const containers = items.filter(i => i.contextValue === 'folder' || i.gxType === 'Module').slice(0, 5);
-                for (const folder of containers) {
-                    // Dispara a busca mas não aguarda o retorno (Background fetch)
-                    this.getChildren(folder).catch(() => {});
-                }
+            // --- ELITE BACKGROUND PRE-FETCH ---
+            // If we just loaded the root, pre-fetch more folders to ensure instant navigation
+            if (parentName === 'Root Module') {
+                const containers = items.filter(i => i.gxType === 'Folder' || i.gxType === 'Module');
+                // Pre-fetch first 10 containers sequentially in background to not choke the gateway
+                (async () => {
+                    for (const folder of containers.slice(0, 10)) {
+                        try { await this.getChildren(folder); } catch {}
+                        await new Promise(r => setTimeout(r, 100)); // Small gap
+                    }
+                })();
             }
 
             return items;

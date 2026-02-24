@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GxShadowService } from './gxShadowService';
+import { GxDiagnosticProvider } from './diagnosticProvider';
 
 // Maps GeneXus type names → suffix before .gx
 export const TYPE_SUFFIX: Record<string, string> = {
@@ -28,6 +29,9 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
     private _shadowService?: GxShadowService;
     public setShadowService(service: GxShadowService) { this._shadowService = service; }
+
+    private _diagnosticProvider?: GxDiagnosticProvider;
+    public setDiagnosticProvider(provider: GxDiagnosticProvider) { this._diagnosticProvider = provider; }
 
     private _filePartState = new Map<string, string>(); // Maps uri.path -> partName
     private _contentCache = new Map<string, Uint8Array>(); // Holds content AFTER a save or latest read from Worker
@@ -74,18 +78,28 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     public async initKb() {
-        console.log("[Nexus IDE] Warming up KB and pre-fetching common modules...");
+        console.log("[Nexus IDE] Warming up KB...");
+        
+        // Fast Path: Check if Gateway is already ready
+        try {
+            const health = await this.callGateway({ method: "execute_command", params: { module: 'Health', action: 'Ping' } }, 2000);
+            if (health) console.log("[Nexus IDE] Backend already warm.");
+        } catch {}
+
         const initPromise = this.callGateway({ method: "execute_command", params: { module: 'KB', action: 'Initialize' } });
         
-        // PERFORMANCE: Pre-fetch Root and Common Modules in parallel with KB Init
+        // PERFORMANCE: Pre-fetch Root immediately without waiting for SDK init (rely on Search Cache)
+        this.readDirectory(vscode.Uri.parse('genexus:/')).catch(() => {});
+
         initPromise.then(() => {
-            const commonParents = ['Root Module', 'General', 'Common', 'API'];
+            console.log("[Nexus IDE] KB SDK Init complete. Triggering background pre-fetch...");
+            const commonParents = ['General', 'Common', 'API'];
             commonParents.forEach(parent => {
-                this.readDirectory(vscode.Uri.parse(`genexus:/${parent === 'Root Module' ? '' : parent}`));
+                this.readDirectory(vscode.Uri.parse(`genexus:/${parent}`)).catch(() => {});
             });
 
             // PERFORMANCE: Background Metadata Shadowing for structured objects
-            setTimeout(() => this.shadowMetadata(), 5000);
+            setTimeout(() => this.shadowMetadata(), 2000);
         });
 
         return initPromise;
@@ -303,6 +317,13 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
             const isEmpty = !result || (typeof result === 'string' && result.trim() === "");
 
             if (isError || isEmpty) {
+                if (result && result.issues && this._diagnosticProvider) {
+                    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri.toString());
+                    if (editor) {
+                        this._diagnosticProvider.setDiagnostics(editor.document, result.issues);
+                    }
+                }
+
                 const errorDetail = result?.error || result?.output || (isEmpty ? "Empty response from Worker" : "Unknown Worker Error");
                 throw new Error(errorDetail);
             }
