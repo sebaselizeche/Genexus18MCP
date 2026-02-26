@@ -101,13 +101,13 @@ export class IndexView {
             if (data.type === 'update') {
               renderIndexes(data.data);
             } else if (data.type === 'error') {
-              document.getElementById('content').innerHTML = \`<h2 style="color:#f44; padding: 20px;">Error: \${data.message}</h2>\`;
+              document.getElementById('content').innerHTML = '<h2 style="color:#f44; padding: 20px;">Error: ' + data.message + '</h2>';
             }
           });
 
           const icons = {
-            key: \`<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 1a3.49 3.49 0 0 0-3.3 2.33l-.1.3L1 11.06V15h3.94l1.37-1.37.13-.53-.53-.13L5 13.06V12h1v-1H5v-1h1V9h1v1h1.06l3.11-3.11.3-.1A3.5 3.5 0 1 0 11.5 1zm0 5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>\`,
-            file: \`<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M13.71 4.29l-3-3L10 1H4l-.5.5v13l.5.5h8l.5-.5V5l-.29-.71zM10 5V2.41L12.59 5H10zM4 14V2h5v4h4v8H4z"/></svg>\`
+            key: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 1a3.49 3.49 0 0 0-3.3 2.33l-.1.3L1 11.06V15h3.94l1.37-1.37.13-.53-.53-.13L5 13.06V12h1v-1H5v-1h1V9h1v1h1.06l3.11-3.11.3-.1A3.5 3.5 0 1 0 11.5 1zm0 5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>',
+            file: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M13.71 4.29l-3-3L10 1H4l-.5.5v13l.5.5h8l.5-.5V5l-.29-.71zM10 5V2.41L12.59 5H10zM4 14V2h5v4h4v8H4z"/></svg>'
           };
 
           function renderIndexes(data) {
@@ -122,19 +122,19 @@ export class IndexView {
 
             data.indexes.forEach(idx => {
               const rowClass = idx.isPrimary ? 'primary-key' : '';
-              html += \`<tr>\`;
-              html += \`<td class="index-name \${rowClass}">\${idx.isPrimary ? icons.key : icons.file} \${idx.name}</td>\`;
+              html += '<tr>';
+              html += '<td class="index-name ' + rowClass + '">' + (idx.isPrimary ? icons.key : icons.file) + ' ' + idx.name + '</td>';
               
               html += '<td><ul class="attr-list">';
               idx.attributes.forEach(attr => {
-                html += \`<li class="attr-item"><span>\${attr.name}</span> <span class="order-tag">\${attr.isAscending ? 'ASC' : 'DESC'}</span></li>\`;
+                html += '<li class="attr-item"><span>' + attr.name + '</span> <span class="order-tag">' + (attr.isAscending ? 'ASC' : 'DESC') + '</span></li>';
               });
               html += '</ul></td>';
 
-              html += \`<td>\`;
+              html += '<td>';
               if (idx.isPrimary) html += '<span class="prop-tag">Primary</span>';
               if (idx.isUnique) html += '<span class="prop-tag" style="background: #2da44e">Unique</span>';
-              html += \`</td>\`;
+              html += '</td>';
 
               html += '</tr>';
             });

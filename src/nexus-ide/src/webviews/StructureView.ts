@@ -12,6 +12,7 @@ export class StructureView {
     const uriKey = uri.toString() + ":VisualStructure";
     const target = typeStr ? `${typeStr}:${objName}` : objName;
 
+    // Apenas Table é Read-Only. Transaction permite edição.
     const isReadOnly = typeStr === "Table";
 
     if (this.panels.has(uriKey)) {
@@ -172,16 +173,15 @@ export class StructureView {
       </head>
       <body>
         <div class="toolbar">
-          \${
+          ${
             !isReadOnly
-              ? \`<button onclick="addRow(false)"><span>➕</span> Attr</button>
-                <button onclick="addRow(true)"><span>📁</span> Level</button>\`
-              : \`<span class="readonly-badge">READ-ONLY (Edit in Transaction)</span>\`
+              ? '<button onclick="addRow(false)"><span>➕</span> Attr</button><button onclick="addRow(true)"><span>📁</span> Level</button>'
+              : '<span class="readonly-badge">READ-ONLY (Edit in Transaction)</span>'
           }
           <div class="search-container">
             <input type="text" class="search-input" placeholder="Filter..." oninput="filterRows(this.value)">
           </div>
-          \${!isReadOnly ? \`<button class="primary" onclick="requestSave()"><span>💾</span> Save</button>\` : ""}
+          ${!isReadOnly ? '<button class="primary" onclick="requestSave()"><span>💾</span> Save</button>' : ""}
           <div id="status">Ready</div>
         </div>
         
@@ -198,7 +198,7 @@ export class StructureView {
 
         <script>
           const vscode = acquireVsCodeApi();
-          const isReadOnly = \${isReadOnly};
+          const isReadOnly = ${isReadOnly};
           let currentData = null;
           let filterText = "";
           
@@ -228,9 +228,9 @@ export class StructureView {
           }
 
           const icons = {
-            key: \`<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 1a3.49 3.49 0 0 0-3.3 2.33l-.1.3L1 11.06V15h3.94l1.37-1.37.13-.53-.53-.13L5 13.06V12h1v-1H5v-1h1V9h1v1h1.06l3.11-3.11.3-.1A3.5 3.5 0 1 0 11.5 1zm0 5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>\`,
-            attr: \`<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2v12h14V2H1zm13 11H2V3h12v10zM4 5h8v1H4V5zm0 3h8v1H4V8zm0 3h5v1H4v-1z"/></svg>\`,
-            level: \`<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-2-2H1.5l-.5.5v11l.5.5h13l.5-.5v-9l-.5-.5zM14 12H2V2h3.29l2 2H14v8z"/></svg>\`
+            key: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 1a3.49 3.49 0 0 0-3.3 2.33l-.1.3L1 11.06V15h3.94l1.37-1.37.13-.53-.53-.13L5 13.06V12h1v-1H5v-1h1V9h1v1h1.06l3.11-3.11.3-.1A3.5 3.5 0 1 0 11.5 1zm0 5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>',
+            attr: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2v12h14V2H1zm13 11H2V3h12v10zM4 5h8v1H4V5zm0 3h8v1H4V8zm0 3h5v1H4v-1z"/></svg>',
+            level: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-2-2H1.5l-.5.5v11l.5.5h13l.5-.5v-9l-.5-.5zM14 12H2V2h3.29l2 2H14v8z"/></svg>'
           };
 
           function renderStructure() {
@@ -250,37 +250,35 @@ export class StructureView {
                 const indentSpace = '<span class="indent"></span>'.repeat(levelNum);
                 const rowClass = item.isLevel ? 'level-row' : '';
                 
-                html += \`<tr class="\${rowClass}" data-id="\${id}">\`;
+                html += '<tr class="' + rowClass + '" data-id="' + id + '">';
                 
                 let iconHtml = item.isLevel ? icons.level : (item.isKey ? icons.key : icons.attr);
                 let iconClass = item.isLevel ? 'level-icon' : (item.isKey ? 'key-icon' : 'attr-icon');
 
                 const nameEditable = !isReadOnly ? 'contenteditable="true"' : '';
-                html += \`<td class="item-name-cell">\${indentSpace}<span class="icon \${iconClass}" onclick="toggleKey('\${id}')">\${iconHtml}</span><span class="editable" \${nameEditable} onblur="updateLocalData('\${id}', 'name', this.innerText)">\${item.name}</span></td>\`;
+                html += '<td class="item-name-cell">' + indentSpace + '<span class="icon ' + iconClass + '" onclick="toggleKey(\'' + id + '\')">' + iconHtml + '</span><span class="editable" ' + nameEditable + ' onblur="updateLocalData(\'' + id + '\', \'name\', this.innerText)">' + item.name + '</span></td>';
                 
                 const typeDisabled = isReadOnly || item.isLevel ? "readonly" : "";
-                html += \`<td style="position: relative"><input type="text" list="gx-types" class="type-input" value="\${item.type || ''}" onchange="updateLocalData('\${id}', 'type', this.value)" \${typeDisabled} autocomplete="off"/></td>\`;
+                html += '<td style="position: relative"><input type="text" list="gx-types" class="type-input" value="' + (item.type || '') + '" onchange="updateLocalData(\'' + id + '\', \'type\', this.value)" ' + typeDisabled + ' autocomplete="off"/></td>';
                 
                 const descEditable = !isReadOnly && !item.isLevel;
-                html += \`<td class="editable" contenteditable="\${descEditable}" onblur="updateLocalData('\${id}', 'description', this.innerText)">\${item.description || ''}</td>\`;
+                html += '<td class="editable" contenteditable="' + descEditable + '" onblur="updateLocalData(\'' + id + '\', \'description\', this.innerText)">' + (item.description || '') + '</td>';
                 
                 const formulaEditable = !isReadOnly && !item.isLevel;
-                html += \`<td class="editable formula-text" contenteditable="\${formulaEditable}" onblur="updateLocalData('\${id}', 'formula', this.innerText)">\${item.formula || ''}</td>\`;
+                html += '<td class="editable formula-text" contenteditable="' + formulaEditable + '" onblur="updateLocalData(\'' + id + '\', \'formula\', this.innerText)">' + (item.formula || '') + '</td>';
                 
                 if (item.isLevel) {
                   html += '<td></td>';
                 } else {
                   const val = item.nullable || 'No';
-                  html += \`<td>
-                    <select class="nullable-select" \${isReadOnly ? 'disabled' : ''} onchange="updateLocalData('\${id}', 'nullable', this.value)">
-                      <option value="No" \${val === 'No' ? 'selected' : ''}>No</option>
-                      <option value="Yes" \${val === 'Yes' ? 'selected' : ''}>Yes</option>
-                      <option value="Managed" \${val === 'Managed' || val === 'Compatible' ? 'selected' : ''}>Mng</option>
-                    </select>
-                  </td>\`;
+                  html += '<td><select class="nullable-select" ' + (isReadOnly ? 'disabled' : '') + ' onchange="updateLocalData(\'' + id + '\', \'nullable\', this.value)">' +
+                      '<option value="No" ' + (val === 'No' ? 'selected' : '') + '>No</option>' +
+                      '<option value="Yes" ' + (val === 'Yes' ? 'selected' : '') + '>Yes</option>' +
+                      '<option value="Managed" ' + (val === 'Managed' || val === 'Compatible' ? 'selected' : '') + '>Mng</option>' +
+                    '</select></td>';
                 }
                 
-                html += \`<td class="actions-cell">\${!isReadOnly ? \`<button class="btn-del" onclick="deleteRow('\${id}')">×</button>\` : ''}</td>\`;
+                html += '<td class="actions-cell">' + (!isReadOnly ? '<button class="btn-del" onclick="deleteRow(\'' + id + '\')">×</button>' : '') + '</td>';
                 html += '</tr>';
                 
                 if (item.children && item.children.length > 0) {

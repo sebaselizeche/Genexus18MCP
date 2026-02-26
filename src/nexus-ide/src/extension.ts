@@ -11,6 +11,7 @@ import { ShadowManager } from "./managers/ShadowManager";
 import { ContextManager } from "./managers/ContextManager";
 import { CommandManager } from "./managers/CommandManager";
 import { ProviderManager } from "./managers/ProviderManager";
+import { McpDiscoveryManager } from "./managers/McpDiscoveryManager";
 
 let backendManager: BackendManager;
 
@@ -27,6 +28,9 @@ export async function activate(context: vscode.ExtensionContext) {
   const contextManager = new ContextManager(context, provider);
   const shadowService = new GxShadowService(provider.baseUrl);
   provider.setShadowService(shadowService);
+
+  const discoveryManager = new McpDiscoveryManager(context, provider);
+  discoveryManager.register();
 
   const diagnosticProvider = new GxDiagnosticProvider(
     (cmd) => provider.callGateway(cmd),
