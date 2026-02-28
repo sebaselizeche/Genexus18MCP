@@ -104,6 +104,13 @@ namespace GxMcp.Gateway
                 return router.ConvertToolCall(toolName, args);
             }
 
+            // Fallback O(n) in case dynamic reflection failed during initialization
+            foreach (var r in _routers)
+            {
+                var converted = r.ConvertToolCall(toolName, args);
+                if (converted != null) return converted;
+            }
+
             return null;
         }
     }

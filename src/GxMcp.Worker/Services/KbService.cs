@@ -127,59 +127,34 @@ namespace GxMcp.Worker.Services
             const int chunkSize = 200; // Larger chunk for parallel processing
             int endIndex = Math.Min(startIndex + chunkSize, objects.Count);
 
-            // 1. DATA EXTRACTION (SEQUENTIAL STA)
-            // We must extract strings/metadata from SDK objects while on the STA thread.
-            var dataList = new List<dynamic>();
+            // 1. DATA EXTRACTION (FAST PATH - Basic Metadata only)
+            var fastDataList = new List<dynamic>();
             for (int i = startIndex; i < endIndex; i++)
             {
                 var obj = objects[i];
                 try {
-                    var data = new {
+                    fastDataList.Add(new {
+                        Guid = obj.Guid.ToString(),
                         Name = obj.Name,
                         Type = obj.TypeDescriptor.Name,
                         Description = obj.Description,
                         Parent = (obj.Parent != null && obj.Parent.Guid != obj.Guid) ? ((obj.Parent.TypeDescriptor.Name == "DesignModel") ? "Root Module" : obj.Parent.Name) : null,
-                        Module = (obj.Module != null && obj.Module.Guid != obj.Guid) ? obj.Module.Name : null,
-                        Rules = obj.Parts.Get<global::Artech.Genexus.Common.Parts.RulesPart>()?.Source,
-                        Source = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>()?.Source,
-                        Attribute = (obj is global::Artech.Genexus.Common.Objects.Attribute a) ? new { Type = a.Type.ToString(), Length = a.Length, Decimals = a.Decimals } : null
-                    };
-                    dataList.Add(data);
+                        Module = (obj.Module != null && obj.Module.Guid != obj.Guid) ? obj.Module.Name : null
+                    });
                 } catch { }
             }
 
-            // 2. DATA PROCESSING (PARALLEL CPU)
-            // Now we process the extracted strings using all available CPU cores.
-            System.Threading.Tasks.Parallel.ForEach(dataList, data => {
+            // 2. FAST PROCESSING
+            System.Threading.Tasks.Parallel.ForEach(fastDataList, data => {
                 try {
                     var entry = new SearchIndex.IndexEntry {
+                        Guid = data.Guid,
                         Name = data.Name,
                         Type = data.Type,
                         Description = data.Description,
                         Parent = data.Parent,
                         Module = data.Module
                     };
-
-                    bool isCoreType = data.Type == "Procedure" || data.Type == "WebPanel" || data.Type == "Transaction" || data.Type == "DataProvider" || data.Type == "SDT" || data.Type == "Attribute" || data.Type == "Table";
-                    if (isCoreType) {
-                        if (data.Attribute != null) {
-                            entry.DataType = data.Attribute.Type;
-                            entry.Length = data.Attribute.Length;
-                            entry.Decimals = data.Attribute.Decimals;
-                        } else if (data.Type == "Table") {
-                            entry.RootTable = data.Name;
-                        }
-
-                        if (data.Type == "Procedure" || data.Type == "WebPanel" || data.Type == "DataProvider") {
-                            if (!string.IsNullOrEmpty(data.Rules)) {
-                                var parmMatch = System.Text.RegularExpressions.Regex.Match(data.Rules, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
-                                if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
-                            }
-                            if (!string.IsNullOrEmpty(data.Source)) {
-                                entry.SourceSnippet = string.Join("\n", ((string)data.Source).Split('\n').Take(5)).Trim();
-                            }
-                        }
-                    }
 
                     lock (index.Objects) {
                         index.Objects[string.Format("{0}:{1}", entry.Type, entry.Name)] = entry;
@@ -188,8 +163,19 @@ namespace GxMcp.Worker.Services
             });
 
             _processedCount = endIndex;
+
+            // EARLY CHECKPOINT for responsiveness
+            if (startIndex == 0 && endIndex >= 100) {
+                _indexCacheService.UpdateIndex(index);
+            }
+
+            if (endIndex % 5000 == 0) {
+                Logger.Info(string.Format("Fast Indexing Checkpoint: {0}/{1}", endIndex, objects.Count));
+                _indexCacheService.UpdateIndex(index);
+            }
+            
             if (endIndex % 1000 == 0 || endIndex == objects.Count) {
-                Logger.Info(string.Format("Indexing Progress: {0}/{1} (Parallel Processed)", endIndex, objects.Count));
+                Logger.Info(string.Format("Fast Indexing Progress: {0}/{1}", endIndex, objects.Count));
             }
 
             if (endIndex < objects.Count) {
@@ -197,9 +183,58 @@ namespace GxMcp.Worker.Services
             } else {
                 _indexCacheService.UpdateIndex(index);
                 _isIndexing = false;
-                _currentStatus = "Complete";
-                Logger.Info("Bulk Indexing complete (Optimized Parallel).");
+                _currentStatus = "Complete (Hydrating details...)";
+                Logger.Info("Fast Bulk Indexing complete. Starting Background Deep Hydration...");
                 
+                // DEEP HYDRATION (Full Metadata, Parm Rules, Snippets)
+                Program.BackgroundQueue.Enqueue(() => ProcessDeepHydrationChunk(index, objects, 0));
+            }
+        }
+
+        private void ProcessDeepHydrationChunk(SearchIndex index, List<global::Artech.Architecture.Common.Objects.KBObject> objects, int startIndex)
+        {
+            const int chunkSize = 50; // Smaller chunks for deep processing to keep STA smooth
+            int endIndex = Math.Min(startIndex + chunkSize, objects.Count);
+
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                var obj = objects[i];
+                try {
+                    string key = string.Format("{0}:{1}", obj.TypeDescriptor.Name, obj.Name);
+                    if (index.Objects.TryGetValue(key, out var entry))
+                    {
+                        // Hydrate CORE details
+                        if (obj is global::Artech.Genexus.Common.Objects.Attribute a) {
+                            entry.DataType = a.Type.ToString(); entry.Length = a.Length; entry.Decimals = a.Decimals;
+                        }
+                        
+                        var rules = obj.Parts.Get<global::Artech.Genexus.Common.Parts.RulesPart>();
+                        if (rules != null) {
+                            var parmMatch = System.Text.RegularExpressions.Regex.Match(rules.Source, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
+                            if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
+                        }
+
+                        var source = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>();
+                        if (source != null && !string.IsNullOrEmpty(source.Source)) {
+                            entry.SourceSnippet = string.Join("\n", source.Source.Split('\n').Take(5)).Trim();
+                        }
+
+                        // Hydrate structure for SDTs and Tables
+                        if (obj is global::Artech.Genexus.Common.Objects.SDT sdt) {
+                            var sdtService = new SDTService(new ObjectService(_buildService.KbService, _buildService));
+                            entry.SourceSnippet = sdtService.GetSDTStructure(sdt.Name);
+                        }
+                    }
+                } catch { }
+            }
+
+            if (startIndex % 500 == 0) _indexCacheService.UpdateIndex(index);
+
+            if (endIndex < objects.Count) {
+                Program.BackgroundQueue.Enqueue(() => ProcessDeepHydrationChunk(index, objects, endIndex));
+            } else {
+                _indexCacheService.UpdateIndex(index);
+                Logger.Info("Deep Hydration complete. KB detail cache is full.");
                 Program.BackgroundQueue.Enqueue(() => ProcessCrawlChunk(index, objects, 0));
             }
         }

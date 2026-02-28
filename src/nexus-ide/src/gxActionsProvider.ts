@@ -14,8 +14,17 @@ export class GxActionsProvider implements vscode.TreeDataProvider<ActionItem> {
             return [
                 new ActionItem('DevOps', vscode.TreeItemCollapsibleState.Expanded, 'devops', 'rocket'),
                 new ActionItem('Modeling', vscode.TreeItemCollapsibleState.Expanded, 'modeling', 'layers'),
+                new ActionItem('Quality & Testing', vscode.TreeItemCollapsibleState.Expanded, 'quality', 'check-all'),
                 new ActionItem('Visualization', vscode.TreeItemCollapsibleState.Collapsed, 'viz', 'graph'),
                 new ActionItem('AI Intelligence', vscode.TreeItemCollapsibleState.Expanded, 'ai', 'beaker')
+            ];
+        }
+
+        if (element.contextValue === 'quality') {
+            return [
+                new ActionItem('Run Unit Tests (GXtest)', vscode.TreeItemCollapsibleState.None, 'action', 'beaker', 'nexus-ide.runTest'),
+                new ActionItem('Run Performance Linter', vscode.TreeItemCollapsibleState.None, 'action', 'search-stop', 'nexus-ide.runLinter'),
+                new ActionItem('Extract to Procedure...', vscode.TreeItemCollapsibleState.None, 'action', 'symbol-method', 'nexus-ide.extractProcedure')
             ];
         }
 

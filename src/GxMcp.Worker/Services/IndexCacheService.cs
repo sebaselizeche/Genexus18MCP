@@ -205,6 +205,32 @@ namespace GxMcp.Worker.Services
                 entry.DataType = attr.Type.ToString();
                 entry.Length = attr.Length;
                 entry.Decimals = attr.Decimals;
+                entry.IsFormula = attr.Formula != null;
+            }
+            else if (obj is global::Artech.Genexus.Common.Objects.Table tbl)
+            {
+                entry.RootTable = tbl.Name;
+                try {
+                    var children = new Newtonsoft.Json.Linq.JArray();
+                    dynamic dStructure = ((dynamic)tbl).TableStructure;
+                    if (dStructure != null && dStructure.Attributes != null) {
+                        foreach (dynamic tableAttr in dStructure.Attributes) 
+                            children.Add(global::GxMcp.Worker.Services.Structure.VisualStructureMapper.MapAttribute(tableAttr));
+                    }
+                    entry.SourceSnippet = children.ToString(Newtonsoft.Json.Formatting.None);
+                } catch { }
+            }
+            else if (obj is global::Artech.Genexus.Common.Objects.Transaction trn)
+            {
+                entry.RootTable = trn.Structure.Root.Name;
+                try { entry.ParmRule = trn.Rules.Source.Split('\n').FirstOrDefault(l => l.Trim().StartsWith("parm(", StringComparison.OrdinalIgnoreCase)); } catch { }
+            }
+            else if (obj is global::Artech.Genexus.Common.Objects.SDT sdt)
+            {
+                try {
+                    var sdtService = new global::GxMcp.Worker.Services.SDTService(new global::GxMcp.Worker.Services.ObjectService(_buildService.KbService, _buildService));
+                    entry.SourceSnippet = sdtService.GetSDTStructure(sdt.Name);
+                } catch { }
             }
 
             string key = string.Format("{0}:{1}", entry.Type, entry.Name);

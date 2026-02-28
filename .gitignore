@@ -29,3 +29,6 @@ out/
 *.vsix
 
 /tasks
+
+# --- Extension Backend Deployment ---
+/src/nexus-ide/backend/

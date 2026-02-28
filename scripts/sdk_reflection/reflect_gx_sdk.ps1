@@ -39,7 +39,7 @@ if (-not (Test-Path $dllPath)) {
 try {
     $asm = [Reflection.Assembly]::LoadFrom($dllPath)
 } catch {
-    Write-Error "Failed to load assembly $DllName: $_"
+    Write-Error "Failed to load assembly $DllName : $($_.Exception.Message)"
     return
 }
 

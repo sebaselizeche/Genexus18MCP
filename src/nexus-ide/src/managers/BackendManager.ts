@@ -20,7 +20,9 @@ export class BackendManager {
     const configFile = path.join(backendDir, "config.json");
 
     if (!fs.existsSync(gatewayExe)) {
-      console.log("[BackendManager] Backend executable not found. Skipping auto-start.");
+      console.log(
+        "[BackendManager] Backend executable not found. Skipping auto-start.",
+      );
       return;
     }
 
@@ -28,7 +30,9 @@ export class BackendManager {
     const installationPath = this.findBestInstallationPath();
 
     if (!kbPath || !installationPath) {
-      console.log("[BackendManager] Missing KB Path or Installation Path. Auto-start aborted.");
+      console.log(
+        "[BackendManager] Missing KB Path or Installation Path. Auto-start aborted.",
+      );
       return;
     }
 
@@ -80,10 +84,22 @@ export class BackendManager {
       return kbPath;
     }
 
-    const files = await vscode.workspace.findFiles("{*.gxw,*/*.gxw}", "**/node_modules/**", 1);
+    console.log("[BackendManager] Searching for .gxw files...");
+    const files = await vscode.workspace.findFiles(
+      "{*.gxw,*/*.gxw}",
+      "**/node_modules/**",
+      1,
+    );
+    console.log(`[BackendManager] findFiles returned ${files.length} results.`);
     if (files.length > 0) {
-      return path.dirname(files[0].fsPath);
+      const found = path.dirname(files[0].fsPath);
+      console.log(`[BackendManager] Found KB at: ${found}`);
+      return found;
     }
+
+    // Fallback for current project
+    const defaultKb = "C:\\KBs\\academicoLocal";
+    if (fs.existsSync(defaultKb)) return defaultKb;
 
     return "";
   }
@@ -92,8 +108,11 @@ export class BackendManager {
     const config = vscode.workspace.getConfiguration();
     const currentPath = config.get<string>("genexus.installationPath", "");
 
-    if (!currentPath || currentPath === "C:\Program Files (x86)\GeneXus\GeneXus18") {
-      const defaultPath = "C:\Program Files (x86)\GeneXus\GeneXus18";
+    if (
+      !currentPath ||
+      currentPath === "C:\\Program Files (x86)\\GeneXus\\GeneXus18"
+    ) {
+      const defaultPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18";
       if (fs.existsSync(path.join(defaultPath, "GeneXus.exe"))) {
         return defaultPath;
       }
@@ -116,7 +135,7 @@ class BackendHealthMonitor {
   constructor(
     private readonly provider: GxFileSystemProvider,
     private readonly context: vscode.ExtensionContext,
-    private readonly manager: BackendManager
+    private readonly manager: BackendManager,
   ) {}
 
   start() {
@@ -127,13 +146,16 @@ class BackendHealthMonitor {
   async check() {
     if (this._isRestarting) return;
 
-    const isIndexing = (this.context as any).isBulkIndexing || false;
+    const isIndexing = this.provider.isBulkIndexing;
     const timeout = isIndexing ? 15000 : 5000;
 
     try {
       const status = await this.provider.callGateway(
-        { method: "execute_command", params: { module: "Health", action: "Ping" } },
-        timeout
+        {
+          method: "execute_command",
+          params: { module: "Health", action: "Ping" },
+        },
+        timeout,
       );
       if (status) {
         this._consecutiveFailures = 0;
@@ -154,7 +176,7 @@ class BackendHealthMonitor {
     const selection = await vscode.window.showWarningMessage(
       "GeneXus MCP Server parou de responder.",
       "Restart Services",
-      "Wait"
+      "Wait",
     );
 
     if (selection === "Restart Services") {

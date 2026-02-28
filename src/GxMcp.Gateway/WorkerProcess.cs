@@ -14,15 +14,52 @@ namespace GxMcp.Gateway
         private readonly Configuration _config;
         private readonly Channel<string> _commandChannel = Channel.CreateUnbounded<string>();
         private Task? _writerTask;
+        private Task? _healthCheckTask;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private DateTime _lastResponse = DateTime.Now;
+        private bool _isPinging = false;
 
         public event Action<string>? OnRpcResponse;
+        public event Action? OnWorkerExited;
 
         public WorkerProcess(Configuration config)
         {
             _config = config;
             _writerTask = Task.Run(ProcessQueueAsync);
         }
+
+        private async Task RunHealthCheckAsync(CancellationToken ct)
+        {
+            await Task.Delay(5000, ct); // Grace period
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    if (_process != null && !_process.HasExited)
+                    {
+                        // Check for deadlock: No response for more than 45 seconds while we are trying to ping
+                        if ((DateTime.Now - _lastResponse).TotalSeconds > 45)
+                        {
+                            Console.Error.WriteLine("[Gateway] Worker DEADLOCK detected (no response for 45s). Restarting...");
+                            StopProcess();
+                            Start();
+                        }
+                        else
+                        {
+                            // Send a ping
+                            Program.Log("[Health] Sending Ping to Worker...");
+                            var ping = new { jsonrpc = "2.0", id = "heartbeat", method = "ping" };
+                            await SendCommandAsync(JsonConvert.SerializeObject(ping));
+                            }
+                            }
+                            }
+                            catch (Exception ex)
+                            {
+                            Program.Log($"[Health] Error during ping: {ex.Message}");
+                            }
+                            await Task.Delay(15000, ct);
+                            }
+                            }
 
         private async Task ProcessQueueAsync()
         {
@@ -100,9 +137,15 @@ namespace GxMcp.Gateway
             startInfo.EnvironmentVariables["PATH"] = (_config.GeneXus?.InstallationPath ?? "") + ";" + Environment.GetEnvironmentVariable("PATH");
 
             _process = new Process { StartInfo = startInfo };
+            _process.EnableRaisingEvents = true;
+            _process.Exited += (s, e) => {
+                Console.Error.WriteLine("[Gateway] Worker process EXITED.");
+                OnWorkerExited?.Invoke();
+            };
             
             _process.OutputDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data)) {
+                    _lastResponse = DateTime.Now; // Heartbeat update
                     if (e.Data.TrimStart().StartsWith("{") && e.Data.Contains("\"jsonrpc\"")) OnRpcResponse?.Invoke(e.Data);
                     else {
                         Console.Error.WriteLine($"[Worker] {e.Data}");
@@ -120,6 +163,11 @@ namespace GxMcp.Gateway
             _process.StandardInput.AutoFlush = true;
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
+
+            if (_healthCheckTask == null || _healthCheckTask.IsCompleted)
+            {
+                _healthCheckTask = Task.Run(() => RunHealthCheckAsync(_cts.Token));
+            }
         }
 
         public async Task SendCommandAsync(string jsonRpc)

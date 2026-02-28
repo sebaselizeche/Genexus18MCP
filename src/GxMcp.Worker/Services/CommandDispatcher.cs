@@ -38,6 +38,10 @@ namespace GxMcp.Worker.Services
         private readonly SDTService _sdtService;
         private readonly StructureService _structureService;
         private readonly FormatService _formatService;
+        private readonly PropertyService _propertyService;
+        private readonly VersionControlService _versionControlService;
+        private readonly ConversionService _conversionService;
+        private readonly SelfTestService _selfTestService;
 
         private CommandDispatcher()
         {
@@ -69,6 +73,10 @@ namespace GxMcp.Worker.Services
             _sdtService = new SDTService(_objectService);
             _structureService = new StructureService(_objectService);
             _formatService = new FormatService();
+            _propertyService = new PropertyService(_objectService);
+            _versionControlService = new VersionControlService(_kbService);
+            _conversionService = new ConversionService(_objectService);
+            _selfTestService = new SelfTestService(_kbService, _searchService, _linterService);
         }
 
         public static CommandDispatcher Instance
@@ -84,21 +92,12 @@ namespace GxMcp.Worker.Services
             {
                 var request = JObject.Parse(line);
                 string method = request["method"] != null ? request["method"].ToString() : null;
-                
-                // Direct pings are definitely thread-safe
                 if (method == "ping") return true;
-
                 var @params = request["params"] as JObject ?? new JObject();
-
                 if (method == "execute_command")
                 {
                     string module = @params["module"] != null ? @params["module"].ToString() : null;
-                    string action = @params["action"] != null ? @params["action"].ToString() : null;
-
-                    // ONLY truly thread-safe commands (JSON-based, no SDK) run in parallel.
                     if (module == "Health" || module == "Search" || module == "ListObjects" || module == "Formatting") return true;
-                    
-                    // Everything else touches the SDK and MUST run on the sequential STA SdkWorker thread.
                     return false;
                 }
                 return false;
@@ -116,12 +115,7 @@ namespace GxMcp.Worker.Services
                 string method = request["method"] != null ? request["method"].ToString() : null;
                 var @params = request["params"] as JObject ?? new JObject();
 
-                // DYNAMIC SHADOW PATH INJECTION (Transparent Integration)
-                if (@params["shadowPath"] != null)
-                {
-                    string sPath = @params["shadowPath"].ToString();
-                    Environment.SetEnvironmentVariable("GX_SHADOW_PATH", sPath);
-                }
+                if (@params["shadowPath"] != null) Environment.SetEnvironmentVariable("GX_SHADOW_PATH", @params["shadowPath"].ToString());
 
                 if (method == "execute_command")
                 {
@@ -134,8 +128,8 @@ namespace GxMcp.Worker.Services
                     switch (module)
                     {
                         case "KB":
-                            Logger.Info($"KB Command: {action}");
                             if (action == "BulkIndex") return _kbService.BulkIndex();
+                            if (action == "SelfTest") return _selfTestService.RunAllTests();
                             if (action == "GetIndexStatus") return _kbService.GetIndexStatus();
                             if (action == "Initialize") {
                                 if (_kbService.GetKB() != null) return "{\"status\":\"Ready\"}";
@@ -144,14 +138,10 @@ namespace GxMcp.Worker.Services
                             }
                             if (action == "CreateObject") return _objectService.CreateObject(@params["type"]?.ToString(), @params["name"]?.ToString());
                             return "{\"error\": \"Action not found in KB\"}";
-                        case "ListObjects":
-                            return _searchService.Search(null, target, null, @params["limit"] != null ? (int)@params["limit"] : 100);
-                        case "Search":
-                            string q = target ?? (@params["query"] != null ? @params["query"].ToString() : null);
-                            int searchLimit = @params["limit"] != null ? (int)@params["limit"] : 200;
-                            return _searchService.Search(q, null, null, searchLimit);
+                        case "ListObjects": return _searchService.Search(null, target, null, @params["limit"] != null ? (int)@params["limit"] : 100);
+                        case "Search": return _searchService.Search(target ?? @params["query"]?.ToString(), null, null, @params["limit"] != null ? (int)@params["limit"] : 200);
                         case "Read":
-                            if (action == "ExtractSource") return _objectService.ReadObjectSource(target, @params["part"] != null ? @params["part"].ToString() : "Source", @params["offset"]?.ToObject<int?>(), @params["limit"]?.ToObject<int?>(), client);
+                            if (action == "ExtractSource") return _objectService.ReadObjectSource(target, @params["part"]?.ToString() ?? "Source", @params["offset"]?.ToObject<int?>(), @params["limit"]?.ToObject<int?>(), client);
                             if (action == "ExtractAllParts") return _objectService.ExtractAllParts(target, client);
                             if (action == "GetAttribute") return _analyzeService.GetAttributeMetadata(target);
                             if (action == "GetVariables") return _analyzeService.GetVariables(target);
@@ -164,34 +154,32 @@ namespace GxMcp.Worker.Services
                             if (action == "GetDataContext") return _dataInsightService.GetDataContext(target);
                             if (action == "GetParameters") return _analyzeService.GetParameters(target);
                             if (action == "ExplainCode") return _analyzeService.ExplainCode(target, payload);
+                            if (action == "TranslateTo") return _conversionService.TranslateTo(target, @params["language"]?.ToString());
                             return _analyzeService.Analyze(target);
                         case "UI":
                             if (action == "GetUIContext") return _uiService.GetUIContext(target);
                             return "{\"error\":\"Unknown UI action\"}";
-                        // case "Doctor": return _buildService.Doctor(target);
                         case "Batch": return _batchService.ProcessBatch(action, target, payload);
                         case "Forge": return _forgeService.Scaffold(target, payload, @params);
                         case "Refactor": return _refactorService.Refactor(target, action, payload);
                         case "Wiki": return _wikiService.Generate(target);
                         case "History": return _historyService.Execute(target, action);
                         case "Visualizer": return _visualizerService.GenerateGraph(target);
-                        case "Linter":
-                            string linterPart = @params["part"] != null ? @params["part"].ToString() : null;
-                            return _linterService.Lint(target, linterPart);
+                        case "Linter": return _linterService.Lint(target, @params["part"]?.ToString());
                         case "Health": 
                             if (action == "Ping") return _healthService.Ping();
                             return _healthService.GetHealthReport();
                         case "Pattern": return _patternService.GetSample(target);
-                        case "Patch": return _patchService.ApplyPatch(
-                            target, 
-                            @params["part"] != null ? @params["part"].ToString() : null, 
-                            @params["operation"] != null ? @params["operation"].ToString() : null, 
-                            @params["content"] != null ? @params["content"].ToString() : null, 
-                            @params["context"] != null ? @params["context"].ToString() : null,
-                            @params["expectedCount"] != null ? (int)@params["expectedCount"] : 1
-                        );
+                        case "Property":
+                            if (action == "SetProperty") return _propertyService.SetProperty(target, @params["name"]?.ToString(), payload, @params["control"]?.ToString());
+                            return _propertyService.GetProperties(target, @params["control"]?.ToString());
+                        case "VersionControl":
+                            if (action == "Update") return _versionControlService.Update();
+                            if (action == "Commit") return _versionControlService.Commit(payload);
+                            return _versionControlService.GetPendingChanges();
+                        case "Patch": return _patchService.ApplyPatch(target, @params["part"]?.ToString(), @params["operation"]?.ToString(), @params["content"]?.ToString(), @params["context"]?.ToString(), @params["expectedCount"] != null ? (int)@params["expectedCount"] : 1);
                         case "Test": return _testService.RunTest(target);
-                        case "Validation": return _validationService.ValidateCode(target, @params["part"] != null ? @params["part"].ToString() : null, payload);
+                        case "Validation": return _validationService.ValidateCode(target, @params["part"]?.ToString(), payload);
                         case "Build": return _buildService.Build(action, target);
                         case "Structure":
                             if (action == "GetTable") return _structureService.GetVisualStructure(target);
@@ -199,17 +187,12 @@ namespace GxMcp.Worker.Services
                             if (action == "GetVisualIndexes") return _structureService.GetVisualIndexes(target);
                             if (action == "UpdateVisualStructure") return _structureService.UpdateVisualStructure(target, payload);
                             return _sdtService.GetSDTStructure(target);
-                        case "Formatting":
-                            return _formatService.Format(payload);
+                        case "Formatting": return _formatService.Format(payload);
                     }
                 }
-
                 return "{\"error\": \"Method not found: " + EscapeJsonString(method) + "\"}";
             }
-            catch (Exception ex)
-            {
-                return "{\"error\": \"" + EscapeJsonString(ex.Message) + "\"}";
-            }
+            catch (Exception ex) { return "{\"error\": \"" + EscapeJsonString(ex.Message) + "\"}"; }
         }
 
         public static string EscapeJsonString(string s)

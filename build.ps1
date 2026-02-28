@@ -123,3 +123,10 @@ Write-Host "`n✅ Build Complete!" -ForegroundColor Green
 Write-Host "   - Output: $publishDir"
 Write-Host "   - Worker: $publishDir\worker\GxMcp.Worker.exe"
 Write-Host "   - Gateway: $publishDir\GxMcp.Gateway.exe"
+
+# 7. Deploy to Extension Backend (for live development)
+$extBackendDir = Join-Path $root "src\nexus-ide\backend"
+Write-Host "`n🚀 Deploying to Extension Backend: $extBackendDir" -ForegroundColor Cyan
+if (-not (Test-Path $extBackendDir)) { New-Item -Path $extBackendDir -ItemType Directory }
+Copy-Item "$publishDir\*" -Destination "$extBackendDir" -Recurse -Force
+

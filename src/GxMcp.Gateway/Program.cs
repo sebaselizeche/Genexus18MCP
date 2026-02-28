@@ -74,6 +74,21 @@ namespace GxMcp.Gateway
             var config = Configuration.Load();
             _worker = new WorkerProcess(config);
             _worker.OnRpcResponse += HandleWorkerResponse;
+            _worker.OnWorkerExited += () => {
+                Log("Worker Process Exited. Notifying all pending requests...");
+                foreach (var id in _pendingRequests.Keys)
+                {
+                    if (_pendingRequests.TryRemove(id, out var tcs))
+                    {
+                        var errorJson = JsonConvert.SerializeObject(new { 
+                            jsonrpc = "2.0", 
+                            id = id, 
+                            error = new { code = -32603, message = "GeneXus MCP Worker crashed/exited." } 
+                        });
+                        tcs.TrySetResult(errorJson);
+                    }
+                }
+            };
             _worker.Start();
 
             // HTTP Server in background
@@ -157,7 +172,8 @@ namespace GxMcp.Gateway
                     var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = workerCmd };
                     await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
 
-                    if (await Task.WhenAny(tcs.Task, Task.Delay(30000)) == tcs.Task)
+                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(60000));
+                    if (completedTask == tcs.Task)
                     {
                         var resultObj = JObject.Parse(await tcs.Task);
                         var content = resultObj["result"]?.ToString() ?? "";
@@ -175,6 +191,15 @@ namespace GxMcp.Gateway
                             }) 
                         };
                     }
+                    else
+                    {
+                        Log($"Timeout waiting for resource: {request["params"]?["uri"]}");
+                        return new JObject { 
+                            ["jsonrpc"] = "2.0", 
+                            ["id"] = idToken?.DeepClone(), 
+                            ["error"] = JToken.FromObject(new { code = -32603, message = "GeneXus MCP Worker timed out reading resource." }) 
+                        };
+                    }
                 }
             }
 
@@ -185,8 +210,8 @@ namespace GxMcp.Gateway
                 string toolName = paramsObj?["name"]?.ToString() ?? "";
                 var args = paramsObj?["arguments"] as JObject;
                 
-                // 1. CACHE INVALIDATION: If it's a write operation, clear the cache
-                if (toolName.Contains("write") || toolName.Contains("patch"))
+                // 1. CACHE INVALIDATION: If it's a write operation or a re-index, clear the cache
+                if (toolName.Contains("write") || toolName.Contains("patch") || toolName.Contains("bulk_index"))
                 {
                     Log($"[Cache] Invalidation triggered by {toolName}");
                     _semanticCache.Clear();
@@ -204,7 +229,8 @@ namespace GxMcp.Gateway
                     }
                 }
 
-                var workerCmd = McpRouter.ConvertToolCall(request) as JObject;
+                var rawWorkerCmd = McpRouter.ConvertToolCall(request);
+                var workerCmd = rawWorkerCmd != null ? JObject.FromObject(rawWorkerCmd) : null;
                 if (workerCmd != null)
                 {
                     workerCmd["client"] = "mcp";
@@ -236,13 +262,65 @@ namespace GxMcp.Gateway
 
                         return response;
                     }
+                    else
+                    {
+                        Log($"Timeout waiting for tool: {toolName}");
+                        return new JObject { 
+                            ["jsonrpc"] = "2.0", 
+                            ["id"] = idToken?.DeepClone(), 
+                            ["error"] = JToken.FromObject(new { code = -32603, message = $"GeneXus MCP Worker timed out executing tool: {toolName}" }) 
+                        };
+                    }
                 }
             }
+            
+
+            // 4. Compatibility: execute_command (Direct Worker Dispatch)
+            if (method == "execute_command")
+            {
+                string idStr = Guid.NewGuid().ToString();
+                var tcs = new TaskCompletionSource<string>();
+                _pendingRequests[idStr] = tcs;
+
+                var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = request["params"] };
+                await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
+
+                var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(30000));
+                if (completedTask == tcs.Task)
+                {
+                    var resultJson = await tcs.Task;
+                    var resultObj = JObject.Parse(resultJson);
+                    // Match the original ID from request if present
+                    if (idToken != null) resultObj["id"] = idToken.DeepClone();
+                    return resultObj;
+                }
+                else
+                {
+                    Log($"Timeout waiting for execute_command");
+                    return new JObject { 
+                        ["jsonrpc"] = "2.0", 
+                        ["id"] = idToken?.DeepClone(), 
+                        ["error"] = JToken.FromObject(new { code = -32603, message = "GeneXus MCP Worker timed out executing direct command." }) 
+                    };
+                }
+            }
+
+            // Explicitly return an error for unknown tools if convert failed
+            if (method == "tools/call")
+            {
+                return new JObject { 
+                    ["jsonrpc"] = "2.0", 
+                    ["id"] = idToken?.DeepClone(), 
+                    ["error"] = JToken.FromObject(new { code = -32601, message = "Method not found or could not be converted." }) 
+                };
+            }
+            
             return null;
         }
 
         static Task StartHttpServer(Configuration config)
         {
+            Log($"[HTTP] Starting server on port {config.Server.HttpPort}...");
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseUrls($"http://*:{config.Server.HttpPort}");
             builder.Logging.ClearProviders();
@@ -255,30 +333,26 @@ namespace GxMcp.Gateway
             app.MapPost("/api/command", async (HttpRequest request) => {
                 using (var reader = new StreamReader(request.Body)) {
                     string body = await reader.ReadToEndAsync();
-                    Log($"[HTTP] Received command body: {(body.Length > 100 ? body.Substring(0, 100) + "..." : body)}");
                     
-                    var requestObj = JsonConvert.DeserializeObject<JObject>(body);
-                    var workerParams = requestObj?["params"] as JObject ?? requestObj;
-                    if (workerParams != null) workerParams["client"] = "ide";
+                    try {
+                        var requestObj = JsonConvert.DeserializeObject<JObject>(body);
+                        if (requestObj == null) return Results.BadRequest(new { error = "Invalid JSON" });
 
-                    string requestId = Guid.NewGuid().ToString();
-                    var tcs = new TaskCompletionSource<string>();
-                    _pendingRequests[requestId] = tcs;
+                        string method = requestObj["method"]?.ToString() ?? "unknown";
+                        string id = requestObj["id"]?.ToString() ?? "no-id";
+                        Log($"[HTTP] Received {method} (ID: {id})");
 
-                    var rpcWrapper = new { jsonrpc = "2.0", id = requestId, method = "execute_command", @params = workerParams };
-                    string rpcStr = JsonConvert.SerializeObject(rpcWrapper);
-                    Log($"[HTTP] Sending to worker: {(rpcStr.Length > 100 ? rpcStr.Substring(0, 100) + "..." : rpcStr)}");
-                    
-                    await _worker!.SendCommandAsync(rpcStr);
-                    Log($"[HTTP] Command {requestId} sent to worker. Waiting for response...");
-
-                    if (await Task.WhenAny(tcs.Task, Task.Delay(30000)) == tcs.Task) {
-                        var res = JObject.Parse(await tcs.Task);
-                        Log($"[HTTP] Worker responded for {requestId}: {(res.ToString(Formatting.None).Length > 100 ? res.ToString(Formatting.None).Substring(0, 100) + "..." : res.ToString(Formatting.None))}");
-                        return Results.Content(res["result"]?.ToString() ?? await tcs.Task, "application/json");
+                        var response = await ProcessMcpRequest(requestObj);
+                        
+                        if (response != null) {
+                            Log($"[HTTP] Responding to {id}");
+                            return Results.Content(response.ToString(Formatting.None), "application/json");
+                        }
+                        return Results.BadRequest(new { error = "No response generated" });
+                    } catch (Exception ex) {
+                        Log($"[HTTP Error] {ex.Message}");
+                        return Results.Problem(ex.Message);
                     }
-                    Log($"[HTTP] Timeout for {requestId}");
-                    return Results.BadRequest(new { error = "Timeout", requestId = requestId });
                 }
             });
 

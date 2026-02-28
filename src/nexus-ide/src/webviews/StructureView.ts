@@ -202,6 +202,14 @@ export class StructureView {
           let currentData = null;
           let filterText = "";
           
+          window.onerror = function(msg, url, line, col, error) {
+            const errStr = msg + " at " + line + ":" + col;
+            document.getElementById('status').innerText = "JS Error: " + errStr;
+            document.getElementById('status').className = 'error';
+            console.error(errStr, error);
+            return false;
+          };
+
           function setStatus(text, type = '') {
             const el = document.getElementById('status');
             el.innerText = text;
@@ -235,6 +243,10 @@ export class StructureView {
 
           function renderStructure() {
             if (!currentData) return;
+            if (!currentData.children) {
+              document.getElementById('content').innerHTML = "<h1>No structure data available.</h1>";
+              return;
+            }
             let html = '<table class="tree-table"><thead><tr>';
             html += '<th style="width: 40%">Name</th><th style="width: 20%">Type</th><th style="width: 20%">Description</th><th style="width: 15%">Formula</th><th style="width: 80px">Null</th><th class="actions-cell"></th>';
             html += '</tr></thead><tbody>';

@@ -3,11 +3,14 @@ import * as fs from "fs";
 import { GxShadowService } from "../gxShadowService";
 import { GxDiagnosticProvider } from "../diagnosticProvider";
 
+import { GxFileSystemProvider } from "../gxFileSystem";
+
 export class ShadowManager {
   private watcher: vscode.FileSystemWatcher | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
+    private readonly provider: GxFileSystemProvider,
     private readonly shadowService: GxShadowService,
     private readonly diagnosticProvider: GxDiagnosticProvider
   ) {}
@@ -24,7 +27,7 @@ export class ShadowManager {
     );
 
     this.watcher.onDidChange(async (uri) => {
-      if ((this.context as any).isBulkIndexing) return;
+      if (this.provider.isBulkIndexing) return;
       if (this.shadowService.shouldIgnore(uri.fsPath)) return;
 
       await this.shadowService.syncToKB(uri.fsPath);
@@ -32,7 +35,7 @@ export class ShadowManager {
     });
 
     this.watcher.onDidCreate(async (uri) => {
-      if ((this.context as any).isBulkIndexing) return;
+      if (this.provider.isBulkIndexing) return;
       if (this.shadowService.shouldIgnore(uri.fsPath)) return;
       await this.shadowService.syncToKB(uri.fsPath);
     });

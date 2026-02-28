@@ -114,6 +114,11 @@ namespace GxMcp.Gateway.Routers
                     name = "genexus_bulk_index",
                     description = "Full KB crawl to rebuild the search index. Mandatory after large changes. Updates 'parm' rules and snippets.",
                     inputSchema = new { type = "object", properties = new { } }
+                },
+                new {
+                    name = "genexus_self_test",
+                    description = "Runs internal unit/integration tests to verify MCP reliability and feature availability.",
+                    inputSchema = new { type = "object", properties = new { } }
                 }
             };
         }
@@ -123,24 +128,11 @@ namespace GxMcp.Gateway.Routers
             switch (toolName)
             {
                 case "genexus_validate":
-                    return new {
-                        module = "Validation",
-                        action = "Check",
-                        target = args?["name"]?.ToString(),
-                        part = args?["part"]?.ToString() ?? "Source",
-                        payload = args?["code"]?.ToString()
-                    };
+                    return new { module = "Validation", action = "Check", target = args?["name"]?.ToString(), part = args?["part"]?.ToString() ?? "Source", payload = args?["code"]?.ToString() };
                 case "genexus_test":
                     return new { module = "Test", action = "Run", target = args?["name"]?.ToString() };
                 case "genexus_scaffold":
-                    return new {
-                        module = "Forge",
-                        action = "Scaffold",
-                        target = args?["type"]?.ToString(),
-                        payload = args?["name"]?.ToString(),
-                        code = args?["code"]?.ToString(),
-                        description = args?["description"]?.ToString()
-                    };
+                    return new { module = "Forge", action = "Scaffold", target = args?["type"]?.ToString(), payload = args?["name"]?.ToString(), code = args?["code"]?.ToString(), description = args?["description"]?.ToString() };
                 case "genexus_build":
                     return new { module = "Build", action = args?["action"]?.ToString(), target = args?["target"]?.ToString() };
                 case "genexus_visualize":
@@ -157,6 +149,8 @@ namespace GxMcp.Gateway.Routers
                     return new { module = "History", action = args?["action"]?.ToString(), target = args?["name"]?.ToString() };
                 case "genexus_bulk_index":
                     return new { module = "KB", action = "BulkIndex" };
+                case "genexus_self_test":
+                    return new { module = "KB", action = "SelfTest" };
                 default:
                     return null;
             }

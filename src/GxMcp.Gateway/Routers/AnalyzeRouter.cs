@@ -55,6 +55,18 @@ namespace GxMcp.Gateway.Routers
                         properties = new { name = new { type = "string", description = "Object name to lint." } },
                         required = new[] { "name" }
                     }
+                },
+                new {
+                    name = "genexus_translate_to",
+                    description = "Translates a GeneXus object structure/logic to another language (C#, TS, etc).",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new { 
+                            name = new { type = "string", description = "Object name." },
+                            language = new { type = "string", description = "Target language (cs, ts)." }
+                        },
+                        required = new[] { "name", "language" }
+                    }
                 }
             };
         }
@@ -73,6 +85,8 @@ namespace GxMcp.Gateway.Routers
                     return new { module = "Analyze", action = "GetHierarchy", target = args?["name"]?.ToString() };
                 case "genexus_linter":
                     return new { module = "Linter", action = "Analyze", target = args?["name"]?.ToString() };
+                case "genexus_translate_to":
+                    return new { module = "Analyze", action = "TranslateTo", target = args?["name"]?.ToString(), language = args?["language"]?.ToString() };
                 default:
                     return null;
             }

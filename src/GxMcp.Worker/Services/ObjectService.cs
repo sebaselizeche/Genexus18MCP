@@ -178,7 +178,7 @@ namespace GxMcp.Worker.Services
                 if (obj == null) return HealingService.FormatNotFoundError(target, GetIndex());
 
                 var result = new JObject { ["name"] = obj.Name, ["parts"] = new JObject() };
-                string[] partsToFetch = { "Source", "Rules", "Events", "Variables" };
+                string[] partsToFetch = { "Source", "Rules", "Events", "Variables", "Documentation", "Help" };
 
                 foreach (var pName in partsToFetch)
                 {
@@ -441,6 +441,7 @@ namespace GxMcp.Worker.Services
                 case "structure": return Guid.Parse("1608677c-a7a2-4a00-8809-6d2466085a5a");
                 case "webform": return Guid.Parse("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
                 case "help": return Guid.Parse("017ea008-6202-4468-a400-3f412c938473");
+                case "documentation": return Guid.Parse("26323631-6435-4235-3037-333036343530"); // Part Documentation GUID
                 default: return Guid.Empty;
             }
         }

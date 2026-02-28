@@ -8,6 +8,7 @@ import { IndexView } from "../webviews/IndexView";
 import { LayoutView } from "../webviews/LayoutView";
 import { HistoryView } from "../webviews/HistoryView";
 import { DiagramView } from "../webviews/DiagramView";
+import { PropertiesView } from "../webviews/PropertiesView";
 
 export class CommandManager {
   constructor(
@@ -16,7 +17,7 @@ export class CommandManager {
     private readonly treeProvider: GxTreeProvider,
     private readonly diagnosticProvider: GxDiagnosticProvider,
     private readonly contextManager: ContextManager,
-    private readonly historyProvider: any
+    private readonly historyProvider: any,
   ) {}
 
   register() {
@@ -32,11 +33,11 @@ export class CommandManager {
       let targetUri = uri;
       if (!targetUri) {
         const editor = vscode.window.activeTextEditor;
-        if (editor && editor.document.uri.scheme === "genexus") {
+        if (editor && editor.document.uri.scheme === "gxkb18") {
           targetUri = editor.document.uri;
         } else {
           const gxEditor = vscode.window.visibleTextEditors.find(
-            (e) => e.document.uri.scheme === "genexus"
+            (e) => e.document.uri.scheme === "gxkb18",
           );
           if (gxEditor) targetUri = gxEditor.document.uri;
         }
@@ -71,16 +72,33 @@ export class CommandManager {
       this.contextManager.updateActiveContext(targetUri);
     };
 
-    const parts = ["Source", "Rules", "Events", "Variables", "Structure", "Layout", "Indexes"];
+    const parts = [
+      "Source",
+      "Rules",
+      "Events",
+      "Variables",
+      "Structure",
+      "Layout",
+      "Indexes",
+      "Documentation",
+      "Help",
+    ];
     for (const part of parts) {
       this.context.subscriptions.push(
-        vscode.commands.registerCommand(`nexus-ide.switchPart.${part}`, (u) => switchPart(part, u)),
-        vscode.commands.registerCommand(`nexus-ide.switchPart.${part}.active`, (u) => switchPart(part, u))
+        vscode.commands.registerCommand(`nexus-ide.switchPart.${part}`, (u) =>
+          switchPart(part, u),
+        ),
+        vscode.commands.registerCommand(
+          `nexus-ide.switchPart.${part}.active`,
+          (u) => switchPart(part, u),
+        ),
       );
     }
 
     this.context.subscriptions.push(
-        vscode.commands.registerCommand("nexus-ide.showVisualStructure", (u) => StructureView.show(u, this.provider))
+      vscode.commands.registerCommand("nexus-ide.showVisualStructure", (u) =>
+        StructureView.show(u, this.provider),
+      ),
     );
   }
 
@@ -88,70 +106,112 @@ export class CommandManager {
     this.context.subscriptions.push(
       vscode.commands.registerCommand("nexus-ide.runReorg", async () => {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "Checking and Installing Database (Reorg)...", cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Checking and Installing Database (Reorg)...",
+            cancellable: false,
+          },
           async () => {
             const result = await this.provider.callGateway({
               method: "execute_command",
               params: { module: "Build", action: "Reorg" },
             });
             if (result && result.status === "Success") {
-              vscode.window.showInformationMessage("Reorganization successful.");
-            } else {
-              vscode.window.showErrorMessage("Reorganization failed: " + (result?.output || result?.error || "Unknown error"));
-            }
-          }
-        );
-      }),
-
-      vscode.commands.registerCommand("nexus-ide.buildObject", async (item?: GxTreeItem) => {
-        let objName = "";
-        if (item && item.gxName) {
-          objName = item.gxName;
-        } else {
-          const editor = vscode.window.activeTextEditor;
-          if (editor && editor.document.uri.scheme === "genexus") {
-            const pathStr = decodeURIComponent(editor.document.uri.path.substring(1));
-            objName = pathStr.split("/").pop()!.replace(".gx", "");
-          }
-        }
-
-        if (!objName) {
-          vscode.window.showErrorMessage("Selecione um objeto para Build.");
-          return;
-        }
-
-        const outputChannel = vscode.window.createOutputChannel("GeneXus Build");
-        outputChannel.show();
-        outputChannel.appendLine(`[Build] Iniciando 'Build with this only' para: ${objName}...`);
-
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `GeneXus: Building ${objName}...`, cancellable: false },
-          async (progress) => {
-            try {
-              const result = await this.provider.callGateway(
-                { method: "execute_command", params: { module: "Build", action: "Build", target: objName } },
-                600000
+              vscode.window.showInformationMessage(
+                "Reorganization successful.",
               );
-
-              if (result && result.status === "Success") {
-                outputChannel.appendLine(result.output || "Build finalizado com sucesso.");
-                vscode.window.showInformationMessage(`Build de ${objName} concluído!`);
-              } else {
-                const errorMsg = result ? result.error || result.output || JSON.stringify(result) : "Resposta vazia do Gateway";
-                outputChannel.appendLine(`ERRO NO BUILD:\n${errorMsg}`);
-                vscode.window.showErrorMessage(`Falha no Build de ${objName}. Verifique o log de saída.`);
-              }
-            } catch (e) {
-              outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
-              vscode.window.showErrorMessage(`Erro ao chamar o Gateway para Build: ${e}`);
+            } else {
+              vscode.window.showErrorMessage(
+                "Reorganization failed: " +
+                  (result?.output || result?.error || "Unknown error"),
+              );
             }
-          }
+          },
         );
       }),
+
+      vscode.commands.registerCommand(
+        "nexus-ide.buildObject",
+        async (item?: GxTreeItem) => {
+          let objName = "";
+          if (item && item.gxName) {
+            objName = item.gxName;
+          } else {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === "gxkb18") {
+              const pathStr = decodeURIComponent(
+                editor.document.uri.path.substring(1),
+              );
+              objName = pathStr.split("/").pop()!.replace(".gx", "");
+            }
+          }
+
+          if (!objName) {
+            vscode.window.showErrorMessage("Selecione um objeto para Build.");
+            return;
+          }
+
+          const outputChannel =
+            vscode.window.createOutputChannel("GeneXus Build");
+          outputChannel.show();
+          outputChannel.appendLine(
+            `[Build] Iniciando 'Build with this only' para: ${objName}...`,
+          );
+
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `GeneXus: Building ${objName}...`,
+              cancellable: false,
+            },
+            async (progress) => {
+              try {
+                const result = await this.provider.callGateway(
+                  {
+                    method: "execute_command",
+                    params: {
+                      module: "Build",
+                      action: "Build",
+                      target: objName,
+                    },
+                  },
+                  600000,
+                );
+
+                if (result && result.status === "Success") {
+                  outputChannel.appendLine(
+                    result.output || "Build finalizado com sucesso.",
+                  );
+                  vscode.window.showInformationMessage(
+                    `Build de ${objName} concluído!`,
+                  );
+                } else {
+                  const errorMsg = result
+                    ? result.error || result.output || JSON.stringify(result)
+                    : "Resposta vazia do Gateway";
+                  outputChannel.appendLine(`ERRO NO BUILD:\n${errorMsg}`);
+                  vscode.window.showErrorMessage(
+                    `Falha no Build de ${objName}. Verifique o log de saída.`,
+                  );
+                }
+              } catch (e) {
+                outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
+                vscode.window.showErrorMessage(
+                  `Erro ao chamar o Gateway para Build: ${e}`,
+                );
+              }
+            },
+          );
+        },
+      ),
 
       vscode.commands.registerCommand("nexus-ide.rebuildAll", async () => {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "Rebuilding All objects...", cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Rebuilding All objects...",
+            cancellable: false,
+          },
           async () => {
             try {
               await this.provider.callGateway({
@@ -162,30 +222,24 @@ export class CommandManager {
             } catch (e) {
               vscode.window.showErrorMessage(`Rebuild All failed: ${e}`);
             }
-          }
+          },
         );
-      })
+      }),
     );
   }
 
   private registerKbCommands() {
     this.context.subscriptions.push(
-      vscode.commands.registerCommand("nexus-ide.openKb", async () => {
-        vscode.workspace.updateWorkspaceFolders(
-          vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0,
-          null,
-          { uri: vscode.Uri.parse("genexus:/"), name: "GeneXus KB" }
-        );
-        await this.provider.initKb();
-        await vscode.commands.executeCommand("nexus-ide.indexKb");
-      }),
-
       vscode.commands.registerCommand("nexus-ide.indexKb", async () => {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "GeneXus: Real-time Indexing KB...", cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GeneXus: Real-time Indexing KB...",
+            cancellable: false,
+          },
           async (progress) => {
             try {
-              (this.context as any).isBulkIndexing = true;
+              this.provider.isBulkIndexing = true;
               await this.provider.callGateway({
                 method: "execute_command",
                 params: { module: "KB", action: "BulkIndex" },
@@ -211,107 +265,167 @@ export class CommandManager {
                     message: `${status.status} (${current}/${total})`,
                     increment: increment > 0 ? increment : undefined,
                   });
-                } else if (status && (status.status === "Complete" || !status.isIndexing)) {
+                } else if (
+                  status &&
+                  (status.status === "Complete" || !status.isIndexing)
+                ) {
                   isDone = true;
                 }
               }
             } catch (e) {
               vscode.window.showErrorMessage(`Indexing failed: ${e}`);
             } finally {
-                (this.context as any).isBulkIndexing = false;
+              this.provider.isBulkIndexing = false;
             }
-          }
+          },
         );
         this.treeProvider.refresh();
-        vscode.window.showInformationMessage("GeneXus KB Indexed! Hierarchy and Search are now ready.");
+        vscode.window.showInformationMessage(
+          "GeneXus KB Indexed! Hierarchy and Search are now ready.",
+        );
       }),
 
       vscode.commands.registerCommand("nexus-ide.newObject", async () => {
         const types = Object.keys(TYPE_SUFFIX);
-        const selectedType = await vscode.window.showQuickPick(types, { placeHolder: "Select object type to create" });
+        const selectedType = await vscode.window.showQuickPick(types, {
+          placeHolder: "Select object type to create",
+        });
         if (!selectedType) return;
-        const name = await vscode.window.showInputBox({ prompt: `Enter name for the new ${selectedType}`, placeHolder: "e.g. MyNewObject" });
+        const name = await vscode.window.showInputBox({
+          prompt: `Enter name for the new ${selectedType}`,
+          placeHolder: "e.g. MyNewObject",
+        });
         if (!name) return;
 
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Creating ${selectedType}: ${name}...`, cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Creating ${selectedType}: ${name}...`,
+            cancellable: false,
+          },
           async () => {
             try {
               const result = await this.provider.callGateway({
                 method: "execute_command",
-                params: { module: "KB", action: "CreateObject", type: selectedType, name: name },
+                params: {
+                  module: "KB",
+                  action: "CreateObject",
+                  type: selectedType,
+                  name: name,
+                },
               });
               if (result && result.status === "Success") {
-                vscode.window.showInformationMessage(`${selectedType} '${name}' created!`);
-                const suffix = TYPE_SUFFIX[selectedType] ? `.${TYPE_SUFFIX[selectedType]}` : "";
+                vscode.window.showInformationMessage(
+                  `${selectedType} '${name}' created!`,
+                );
+                const suffix = TYPE_SUFFIX[selectedType]
+                  ? `.${TYPE_SUFFIX[selectedType]}`
+                  : "";
                 const uri = vscode.Uri.parse(`genexus:/${name}${suffix}.gx`);
                 await vscode.commands.executeCommand("vscode.open", uri);
                 this.provider.clearDirCache();
                 this.treeProvider.refresh();
               } else {
-                vscode.window.showErrorMessage(`Failed to create object: ${result?.error || "Unknown error"}`);
+                vscode.window.showErrorMessage(
+                  `Failed to create object: ${result?.error || "Unknown error"}`,
+                );
               }
             } catch (e) {
               vscode.window.showErrorMessage(`Error creating object: ${e}`);
             }
-          }
+          },
         );
-      })
+      }),
     );
   }
 
   private registerRefactorCommands() {
     this.context.subscriptions.push(
       vscode.commands.registerCommand("nexus-ide.renameAttribute", async () => {
-        const oldName = await vscode.window.showInputBox({ prompt: "Enter current attribute name", placeHolder: "e.g. CustomerName" });
+        const oldName = await vscode.window.showInputBox({
+          prompt: "Enter current attribute name",
+          placeHolder: "e.g. CustomerName",
+        });
         if (!oldName) return;
-        const newName = await vscode.window.showInputBox({ prompt: `Rename attribute '${oldName}' to:`, placeHolder: "e.g. CustomerFullName" });
+        const newName = await vscode.window.showInputBox({
+          prompt: `Rename attribute '${oldName}' to:`,
+          placeHolder: "e.g. CustomerFullName",
+        });
         if (!newName) return;
 
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Renaming Attribute ${oldName} -> ${newName}...`, cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Renaming Attribute ${oldName} -> ${newName}...`,
+            cancellable: false,
+          },
           async () => {
             try {
               const result = await this.provider.callGateway({
                 method: "execute_command",
-                params: { module: "Refactor", action: "RenameAttribute", target: oldName, payload: newName },
+                params: {
+                  module: "Refactor",
+                  action: "RenameAttribute",
+                  target: oldName,
+                  payload: newName,
+                },
               });
               if (result && result.status === "Success") {
-                vscode.window.showInformationMessage(`Attribute renamed successfully!`);
+                vscode.window.showInformationMessage(
+                  `Attribute renamed successfully!`,
+                );
                 this.provider.clearDirCache();
                 this.treeProvider.refresh();
               } else {
-                vscode.window.showErrorMessage(`Failed to rename: ${result?.error || "Unknown error"}`);
+                vscode.window.showErrorMessage(
+                  `Failed to rename: ${result?.error || "Unknown error"}`,
+                );
               }
             } catch (e) {
               vscode.window.showErrorMessage(`Error renaming attribute: ${e}`);
             }
-          }
+          },
         );
       }),
 
-      vscode.commands.registerCommand("nexus-ide.createVariable", async (uri: vscode.Uri, varName: string) => {
-        const pathStr = decodeURIComponent(uri.path.substring(1));
-        const objName = pathStr.split("/").pop()!.replace(".gx", "");
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Creating Variable &${varName}...`, cancellable: false },
-          async () => {
-            try {
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: { module: "Write", action: "AddVariable", target: objName, varName: varName },
-              });
-              if (result && result.status === "Success") {
-                vscode.window.showInformationMessage(`Variable &${varName} created successfully.`);
-              } else {
-                vscode.window.showErrorMessage(`Failed to create variable: ${result.error || JSON.stringify(result)}`);
+      vscode.commands.registerCommand(
+        "nexus-ide.createVariable",
+        async (uri: vscode.Uri, varName: string) => {
+          const pathStr = decodeURIComponent(uri.path.substring(1));
+          const objName = pathStr.split("/").pop()!.replace(".gx", "");
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Creating Variable &${varName}...`,
+              cancellable: false,
+            },
+            async () => {
+              try {
+                const result = await this.provider.callGateway({
+                  method: "execute_command",
+                  params: {
+                    module: "Write",
+                    action: "AddVariable",
+                    target: objName,
+                    varName: varName,
+                  },
+                });
+                if (result && result.status === "Success") {
+                  vscode.window.showInformationMessage(
+                    `Variable &${varName} created successfully.`,
+                  );
+                } else {
+                  vscode.window.showErrorMessage(
+                    `Failed to create variable: ${result.error || JSON.stringify(result)}`,
+                  );
+                }
+              } catch (e) {
+                vscode.window.showErrorMessage(`Error: ${e}`);
               }
-            } catch (e) {
-              vscode.window.showErrorMessage(`Error: ${e}`);
-            }
-          }
-        );
-      })
+            },
+          );
+        },
+      ),
     );
   }
 
@@ -320,65 +434,279 @@ export class CommandManager {
       vscode.commands.registerCommand("nexus-ide.refreshTree", () => {
         this.provider.clearDirCache();
         this.treeProvider.refresh();
-        this.contextManager.setStatusBarMessage("$(refresh) Nexus IDE: Tree refreshed", 3000);
+        this.contextManager.setStatusBarMessage(
+          "$(refresh) Nexus IDE: Tree refreshed",
+          3000,
+        );
       }),
 
-      vscode.commands.registerCommand("nexus-ide.refreshDiagnostics", async () => {
-        await this.diagnosticProvider.refreshAll();
-      }),
+      vscode.commands.registerCommand(
+        "nexus-ide.refreshDiagnostics",
+        async () => {
+          await this.diagnosticProvider.refreshAll();
+        },
+      ),
 
       vscode.commands.registerCommand("nexus-ide.forceSave", async () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || editor.document.uri.scheme !== "genexus") return;
+        if (!editor || editor.document.uri.scheme !== "genexuskb") return;
         const uri = editor.document.uri;
         const content = Buffer.from(editor.document.getText(), "utf8");
 
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `GeneXus: Salvando ${uri.fsPath}...`, cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `GeneXus: Salvando ${uri.fsPath}...`,
+            cancellable: false,
+          },
           async () => {
             try {
               await this.provider.triggerSave(uri, content);
-              this.contextManager.setStatusBarMessage(`$(check) Salvo: ${uri.fsPath}`, 5000);
+              this.contextManager.setStatusBarMessage(
+                `$(check) Salvo: ${uri.fsPath}`,
+                5000,
+              );
             } catch (e) {
               vscode.window.showErrorMessage(`Erro ao salvar: ${e}`);
             }
-          }
+          },
         );
       }),
 
-      vscode.commands.registerCommand("gx.showReferences", async (objName: string) => {
-        const activeEditor = vscode.window.activeTextEditor;
-        if (!activeEditor) return;
-        await vscode.commands.executeCommand("editor.action.showReferences", activeEditor.document.uri, new vscode.Position(0, 0), []);
+      vscode.commands.registerCommand(
+        "gx.showReferences",
+        async (objName: string) => {
+          const activeEditor = vscode.window.activeTextEditor;
+          if (!activeEditor) return;
+          await vscode.commands.executeCommand(
+            "editor.action.showReferences",
+            activeEditor.document.uri,
+            new vscode.Position(0, 0),
+            [],
+          );
+        },
+      ),
+
+      vscode.commands.registerCommand("nexus-ide.viewHistory", (u) =>
+        HistoryView.show(u, this.provider, this.historyProvider),
+      ),
+      vscode.commands.registerCommand("nexus-ide.generateDiagram", (u) =>
+        DiagramView.show(u, this.provider),
+      ),
+      vscode.commands.registerCommand(
+        "nexus-ide.showProperties",
+        async (uri?: vscode.Uri, controlName?: string) => {
+          let targetUri = uri;
+          if (!targetUri) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === "genexuskb")
+              targetUri = editor.document.uri;
+          }
+          if (!targetUri) return;
+          const pathStr = decodeURIComponent(targetUri.path.substring(1));
+          const typeStr = pathStr.split("/")[0];
+          const objName = pathStr.split("/").pop()!.replace(".gx", "");
+          const target = `${typeStr}:${objName}`;
+          await PropertiesView.show(target, controlName || null, this.provider);
+        },
+      ),
+
+      vscode.commands.registerCommand("nexus-ide.copyMcpConfig", async () => {
+        const port = vscode.workspace
+          .getConfiguration()
+          .get("genexus.mcpPort", 5000);
+        const snippet = JSON.stringify(
+          {
+            mcpServers: {
+              genexus: {
+                command: "npx",
+                args: [
+                  "-y",
+                  "@modelcontextprotocol/server-http",
+                  `http://localhost:${port}/api/command`,
+                ],
+              },
+            },
+          },
+          null,
+          2,
+        );
+        await vscode.env.clipboard.writeText(snippet);
+        vscode.window.showInformationMessage(
+          "MCP Configuration snippet for Claude/Copilot copied to clipboard!",
+        );
       }),
 
-      vscode.commands.registerCommand("nexus-ide.viewHistory", (u) => HistoryView.show(u, this.provider, this.historyProvider)),
-      vscode.commands.registerCommand("nexus-ide.generateDiagram", (u) => DiagramView.show(u, this.provider)),
-      
-      vscode.commands.registerCommand("nexus-ide.copyMcpConfig", async () => {
-        const port = vscode.workspace.getConfiguration().get("genexus.mcpPort", 5000);
-        const snippet = JSON.stringify({ mcpServers: { genexus: { command: "npx", args: ["-y", "@modelcontextprotocol/server-http", `http://localhost:${port}/api/command`] } } }, null, 2);
-        await vscode.env.clipboard.writeText(snippet);
-        vscode.window.showInformationMessage("MCP Configuration snippet for Claude/Copilot copied to clipboard!");
-      }),
+      vscode.commands.registerCommand(
+        "nexus-ide.runTest",
+        async (item?: GxTreeItem) => {
+          let objName = item?.gxName;
+          if (!objName) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === "genexuskb") {
+              objName = editor.document.uri.path
+                .split("/")
+                .pop()
+                ?.replace(".gx", "");
+            }
+          }
+          if (!objName) return;
+
+          const outputChannel =
+            vscode.window.createOutputChannel("GeneXus Test");
+          outputChannel.show();
+          outputChannel.appendLine(`[GXtest] Running tests for: ${objName}...`);
+
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Running GXtest: ${objName}...`,
+              cancellable: false,
+            },
+            async () => {
+              const result = await this.provider.callGateway(
+                {
+                  method: "execute_command",
+                  params: { module: "Test", action: "Run", target: objName },
+                },
+                300000,
+              );
+              if (result && result.status === "Success") {
+                outputChannel.appendLine(result.output || "Test passed!");
+                vscode.window.showInformationMessage(`Test ${objName} PASSED!`);
+              } else {
+                outputChannel.appendLine(
+                  result?.output || result?.error || "Test failed.",
+                );
+                vscode.window.showErrorMessage(
+                  `Test ${objName} FAILED. Check output.`,
+                );
+              }
+            },
+          );
+        },
+      ),
+
+      vscode.commands.registerCommand(
+        "nexus-ide.runLinter",
+        async (item?: GxTreeItem) => {
+          let objName = item?.gxName;
+          if (!objName) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.uri.scheme === "genexuskb") {
+              objName = editor.document.uri.path
+                .split("/")
+                .pop()
+                ?.replace(".gx", "");
+            }
+          }
+          if (!objName) return;
+
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Running Performance Linter: ${objName}...`,
+              cancellable: false,
+            },
+            async () => {
+              await this.diagnosticProvider.refreshAll();
+              vscode.window.showInformationMessage(
+                `Linter completed for ${objName}. Check Problems tab.`,
+              );
+            },
+          );
+        },
+      ),
+
+      vscode.commands.registerCommand(
+        "nexus-ide.extractProcedure",
+        async () => {
+          const editor = vscode.window.activeTextEditor;
+          if (!editor || editor.document.uri.scheme !== "genexuskb") return;
+
+          const selection = editor.selection;
+          const code = editor.document.getText(selection);
+          if (!code) {
+            vscode.window.showErrorMessage(
+              "Selecione um bloco de código para extrair.",
+            );
+            return;
+          }
+
+          const procName = await vscode.window.showInputBox({
+            prompt: "Nome do novo Procedimento:",
+            placeHolder: "e.g. CalculateTax",
+          });
+          if (!procName) return;
+
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Extracting to ${procName}...`,
+              cancellable: false,
+            },
+            async () => {
+              const sourceName = editor.document.uri.path
+                .split("/")
+                .pop()
+                ?.replace(".gx", "");
+              const result = await this.provider.callGateway({
+                method: "execute_command",
+                params: {
+                  module: "Refactor",
+                  action: "ExtractProcedure",
+                  target: sourceName,
+                  payload: JSON.stringify({ code, procedureName: procName }),
+                },
+              });
+
+              if (result && result.status === "Success") {
+                vscode.window.showInformationMessage(
+                  `Procedure '${procName}' created and call injected!`,
+                );
+                await vscode.commands.executeCommand("nexus-ide.refreshTree");
+                await vscode.commands.executeCommand(
+                  "workbench.action.files.save",
+                );
+              } else {
+                vscode.window.showErrorMessage(
+                  `Extraction failed: ${result?.error || "Unknown error"}`,
+                );
+              }
+            },
+          );
+        },
+      ),
 
       vscode.commands.registerCommand("nexus-ide.autoFix", async () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || editor.document.uri.scheme !== "genexus") {
-          vscode.window.showErrorMessage("Abra um objeto GeneXus para usar o Auto-Fix.");
+        if (!editor || editor.document.uri.scheme !== "genexuskb") {
+          vscode.window.showErrorMessage(
+            "Abra um objeto GeneXus para usar o Auto-Fix.",
+          );
           return;
         }
 
-        const diagnostics = vscode.languages.getDiagnostics(editor.document.uri);
-        const error = diagnostics.find((d) => d.severity === vscode.DiagnosticSeverity.Error);
+        const diagnostics = vscode.languages.getDiagnostics(
+          editor.document.uri,
+        );
+        const error = diagnostics.find(
+          (d) => d.severity === vscode.DiagnosticSeverity.Error,
+        );
 
         if (!error) {
-          vscode.window.showInformationMessage("Nenhum erro de build encontrado neste objeto.");
+          vscode.window.showInformationMessage(
+            "Nenhum erro de build encontrado neste objeto.",
+          );
           return;
         }
 
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "AI Analyzing error and proposing fix...", cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "AI Analyzing error and proposing fix...",
+            cancellable: false,
+          },
           async () => {
             try {
               const result = await this.provider.callGateway({
@@ -386,29 +714,49 @@ export class CommandManager {
                 params: {
                   module: "Analyze",
                   action: "ExplainCode",
-                  target: editor.document.uri.path.split("/").pop()?.replace(".gx", ""),
-                  payload: JSON.stringify({ error: error.message, line: error.range.start.line, code: editor.document.getText() }),
+                  target: editor.document.uri.path
+                    .split("/")
+                    .pop()
+                    ?.replace(".gx", ""),
+                  payload: JSON.stringify({
+                    error: error.message,
+                    line: error.range.start.line,
+                    code: editor.document.getText(),
+                  }),
                 },
               });
 
               if (result && result.fix) {
-                const choice = await vscode.window.showInformationMessage(`AI Fix suggested: ${result.summary}\nApply fix?`, "Apply Fix", "Cancel");
+                const choice = await vscode.window.showInformationMessage(
+                  `AI Fix suggested: ${result.summary}\nApply fix?`,
+                  "Apply Fix",
+                  "Cancel",
+                );
                 if (choice === "Apply Fix") {
                   const edit = new vscode.WorkspaceEdit();
-                  const fullRange = new vscode.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length));
+                  const fullRange = new vscode.Range(
+                    editor.document.positionAt(0),
+                    editor.document.positionAt(
+                      editor.document.getText().length,
+                    ),
+                  );
                   edit.replace(editor.document.uri, fullRange, result.fix);
                   await vscode.workspace.applyEdit(edit);
-                  vscode.window.showInformationMessage("AI Fix applied! Save to verify.");
+                  vscode.window.showInformationMessage(
+                    "AI Fix applied! Save to verify.",
+                  );
                 }
               } else {
-                vscode.window.showWarningMessage("AI não conseguiu encontrar uma solução automática para este erro.");
+                vscode.window.showWarningMessage(
+                  "AI não conseguiu encontrar uma solução automática para este erro.",
+                );
               }
             } catch (e) {
               vscode.window.showErrorMessage(`Erro no Auto-Fix: ${e}`);
             }
-          }
+          },
         );
-      })
+      }),
     );
   }
 }

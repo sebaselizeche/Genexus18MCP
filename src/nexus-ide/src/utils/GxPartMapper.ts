@@ -47,8 +47,13 @@ export class GxPartMapper {
     return nameWithoutGx;
   }
 
-  static getObjectTarget(uriPath: string): string {
-    const parts = uriPath.replace(/^\//, "").split("/");
+  static getObjectTarget(uriPath: string): string | null {
+    const cleanPath = uriPath.replace(/^\//, "");
+    if (cleanPath.startsWith(".") || cleanPath.includes("/.")) {
+      return null;
+    }
+
+    const parts = cleanPath.split("/");
     const typeStr = parts.length > 1 ? parts[0] : null;
     const fileName = parts[parts.length - 1];
     const objName = this.getCleanObjName(fileName);

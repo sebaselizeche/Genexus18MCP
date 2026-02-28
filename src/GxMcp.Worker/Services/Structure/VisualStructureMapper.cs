@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
+using Artech.Genexus.Common.Parts;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services.Structure
 {
@@ -10,29 +12,55 @@ namespace GxMcp.Worker.Services.Structure
     {
         public static JObject MapAttribute(dynamic attr)
         {
-            var item = new JObject { ["name"] = attr.Name, ["isKey"] = attr.IsKey, ["isLevel"] = false };
+            string name = "Unknown";
+            bool isKey = false;
+            try { name = attr.Name; } catch { }
+            try { isKey = attr.IsKey; } catch { }
+            
+            var item = new JObject { ["name"] = name, ["isKey"] = isKey, ["isLevel"] = false };
             string typeStr = "Unknown";
             string desc = "";
             string formula = "";
             string isNullable = "No";
 
             try {
-                if (attr.Type != null) typeStr = attr.Type.ToString();
-                else if (attr.Attribute?.Type != null) typeStr = attr.Attribute.Type.ToString();
+                // Try to get the underlying Attribute object
+                Artech.Genexus.Common.Objects.Attribute attrObj = null;
+                try { 
+                    if (attr is TransactionAttribute trnAttr) attrObj = trnAttr.Attribute;
+                    else if (attr is TableAttribute tblAttr) attrObj = tblAttr.Attribute;
+                    else attrObj = attr.Attribute; 
+                } catch { }
 
-                if (attr.Attribute != null) {
-                    desc = attr.Attribute.Description?.ToString() ?? "";
-                    formula = attr.Attribute.Formula?.ToString() ?? "";
-                    int len = attr.Attribute.Length;
-                    int dec = attr.Attribute.Decimals;
-                    if (len > 0) typeStr += (dec > 0) ? $"({len},{dec})" : $"({len})";
+                if (attrObj != null) {
+                    try { 
+                        if (attrObj.Type != null) typeStr = attrObj.Type.ToString(); 
+                    } catch { }
 
+                    try { desc = attrObj.Description?.ToString() ?? ""; } catch { }
+                    try { formula = attrObj.Formula?.ToString() ?? ""; } catch { }
+                    
                     try {
-                        int nVal = (int)attr.IsNullable;
-                        isNullable = (nVal == 1) ? "Yes" : (nVal == 2 ? "Managed" : "No");
+                        int len = (int)attrObj.Length;
+                        int dec = (int)attrObj.Decimals;
+                        if (len > 0) typeStr += (dec > 0) ? $"({len},{dec})" : $"({len})";
                     } catch { }
                 }
-            } catch { }
+
+                // If typeStr is still Unknown, try to get it from the item itself (for Tables)
+                if (typeStr == "Unknown") {
+                    try { if (attr.Type != null) typeStr = attr.Type.ToString(); } catch { }
+                }
+
+                // Nullable handling
+                try {
+                    // Try to cast to the specific enum type we found earlier
+                    int nVal = (int)attr.IsNullable;
+                    isNullable = (nVal == 1) ? "Yes" : (nVal == 2 ? "Managed" : "No");
+                } catch { }
+            } catch (Exception ex) {
+                Logger.Error($"[VisualStructureMapper] Fatal error mapping {name}: {ex.Message}");
+            }
 
             item["type"] = typeStr;
             item["description"] = desc;

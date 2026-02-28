@@ -78,12 +78,12 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
-                // 3. Scoring and Finalizing - OPTIMIZED FOR MEMORY AND SPEED
+                // 3. Scoring and Finalizing - OPTIMIZED FOR SEMANTIC RELEVANCE
                 var scoredResults = queryResults
                     .Select(entry => {
                         int score = 0;
                         if (criteria.Terms.Count > 0) {
-                            score = CalculateFastScore(entry, criteria.Terms);
+                            score = CalculateSemanticScore(entry, criteria.Terms);
                             if (score <= 0) return new RankedResult { Score = -1 };
                         } else {
                             score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1;
@@ -162,17 +162,30 @@ namespace GxMcp.Worker.Services
             catch (Exception ex) { return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
         }
 
-        private int CalculateFastScore(SearchIndex.IndexEntry entry, HashSet<string> terms)
+        private int CalculateSemanticScore(SearchIndex.IndexEntry entry, HashSet<string> terms)
         {
             int score = 0;
-            string name = entry.Name;
-            if (string.IsNullOrEmpty(name)) return 0;
-
+            string name = entry.Name ?? "";
+            string desc = entry.Description ?? "";
+            
             foreach (var term in terms) {
-                // terms are already lowercased once in ParseQuery
-                if (name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
-                else if (name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 500;
-                else if (name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
+                // Exact name match
+                if (name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 2000;
+                // Name starts with term
+                else if (name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
+                // Name contains term
+                else if (name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 500;
+                
+                // Description match
+                if (desc.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 300;
+
+                // Keyword/Tag match
+                if (entry.Keywords != null && entry.Keywords.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 800;
+                if (entry.Tags != null && entry.Tags.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 800;
+
+                // Structural context matches
+                if (entry.Tables != null && entry.Tables.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 400;
+                if (entry.Calls != null && entry.Calls.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 400;
             }
             return score;
         }

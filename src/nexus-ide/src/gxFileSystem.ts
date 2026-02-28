@@ -11,12 +11,16 @@ export { TYPE_SUFFIX };
 
 export class GxFileSystemProvider implements vscode.FileSystemProvider {
   private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
-  readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._emitter.event;
+  readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> =
+    this._emitter.event;
 
   private _gateway: GxGatewayClient;
   private _cache: GxCacheManager;
   private _shadowService?: GxShadowService;
   private _diagnosticProvider?: GxDiagnosticProvider;
+  public isBulkIndexing: boolean = false;
+
+  private _kbInitPromise: Promise<any> | null = null;
 
   constructor() {
     this._cache = new GxCacheManager();
@@ -51,37 +55,49 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
   }
 
   public async initKb() {
+    if (this._kbInitPromise) return this._kbInitPromise;
+
     console.log("[Nexus IDE] Warming up KB...");
     try {
       await this.callGateway({ module: "Health", action: "Ping" }, 2000);
     } catch {}
 
-    const initPromise = this.callGateway({ module: "KB", action: "Initialize" });
-    this.readDirectory(vscode.Uri.parse("genexus:/")).catch(() => {});
+    this._kbInitPromise = this.callGateway(
+      { module: "KB", action: "Initialize" },
+      300000,
+    );
 
-    initPromise.then(() => {
-      console.log("[Nexus IDE] KB SDK Init complete. Triggering background pre-fetch...");
-      ["General", "Common", "API"].forEach((parent) => {
-        this.readDirectory(vscode.Uri.parse(`genexus:/${parent}`)).catch(() => {});
-      });
+    this._kbInitPromise.then(() => {
+      console.log("[Nexus IDE] KB SDK Init complete. Refreshing Root...");
+      this._emitter.fire([
+        {
+          type: vscode.FileChangeType.Changed,
+          uri: vscode.Uri.from({ scheme: "gxkb18", path: "/" }),
+        },
+      ]);
       setTimeout(() => this.shadowMetadata(), 1000);
     });
 
-    return initPromise;
+    return this._kbInitPromise;
   }
 
   private async shadowMetadata() {
     try {
       const result = await this.callGateway({
         module: "Search",
-        query: "type:Transaction or type:SDT",
+        action: "Query",
+        target: "type:Transaction or type:SDT",
         limit: 20,
       });
 
       if (result && result.results) {
         for (const obj of result.results) {
-          const suffix = TYPE_SUFFIX[obj.type] ? `.${TYPE_SUFFIX[obj.type]}` : "";
-          const uri = vscode.Uri.parse(`genexus:/${obj.type}/${obj.name}${suffix}.gx`);
+          const suffix = TYPE_SUFFIX[obj.type]
+            ? `.${TYPE_SUFFIX[obj.type]}`
+            : "";
+          const uri = vscode.Uri.parse(
+            `gxkb18:/${obj.type}/${obj.name}${suffix}.gx`,
+          );
           const part = obj.type === "Transaction" ? "Structure" : "Source";
           this.fetchAndCacheMetadata(uri, obj.type, obj.name, part);
         }
@@ -91,9 +107,16 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     }
   }
 
-  private async fetchAndCacheMetadata(uri: vscode.Uri, objType: string, objName: string, partName: string) {
+  private async fetchAndCacheMetadata(
+    uri: vscode.Uri,
+    objType: string,
+    objName: string,
+    partName: string,
+  ) {
     try {
-      const target = VALID_TYPES.has(objType) ? `${objType}:${objName}` : objName;
+      const target = VALID_TYPES.has(objType)
+        ? `${objType}:${objName}`
+        : objName;
       const res = await this.callGateway({
         module: "Read",
         action: "ExtractSource",
@@ -101,24 +124,62 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         part: partName,
       });
       if (res && res.source) {
-        let decoded = res.isBase64 ? Buffer.from(res.source, "base64").toString("utf8") : res.source;
+        let decoded = res.isBase64
+          ? Buffer.from(res.source, "base64").toString("utf8")
+          : res.source;
         this._cache.metadataCache.set(uri.toString() + ":" + partName, decoded);
       }
     } catch {}
   }
 
-  watch(_uri: vscode.Uri, _options: { recursive: boolean; excludes: string[] }): vscode.Disposable {
+  watch(
+    _uri: vscode.Uri,
+    _options: { recursive: boolean; excludes: string[] },
+  ): vscode.Disposable {
     return new vscode.Disposable(() => {});
   }
 
   stat(uri: vscode.Uri): vscode.FileStat {
+    console.log(`[GxFS] stat: ${uri.toString()}`);
     const pathStr = decodeURIComponent(uri.path.substring(1));
-    if (pathStr.startsWith(".") || pathStr.includes("tasks.json") || pathStr.includes("settings.json")) {
+
+    // Support IDE metadata probes (VS Code / Antigravity)
+    if (
+      pathStr === ".vscode" ||
+      pathStr === ".mcp" ||
+      pathStr === ".antigravity"
+    ) {
+      return {
+        type: vscode.FileType.Directory,
+        ctime: Date.now(),
+        mtime: Date.now(),
+        size: 0,
+      };
+    }
+    if (
+      pathStr.includes("mcp.json") ||
+      pathStr.includes("tasks.json") ||
+      pathStr.includes("settings.json")
+    ) {
+      return {
+        type: vscode.FileType.File,
+        ctime: Date.now(),
+        mtime: Date.now(),
+        size: 0,
+      };
+    }
+
+    if (pathStr.startsWith(".") && !pathStr.startsWith(".gx")) {
       throw vscode.FileSystemError.FileNotFound(uri);
     }
 
     if (pathStr === "" || !pathStr.endsWith(".gx")) {
-      return { type: vscode.FileType.Directory, ctime: Date.now(), mtime: Date.now(), size: 0 };
+      return {
+        type: vscode.FileType.Directory,
+        ctime: Date.now(),
+        mtime: Date.now(),
+        size: 0,
+      };
     }
 
     const cachedContent = this._cache.contentCache.get(uri.toString());
@@ -127,11 +188,16 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     if (size === 0) {
       const objName = pathStr.split("/").pop()!.replace(".gx", "");
       const objType = pathStr.split("/")[0];
-      const shadowPath = path.join(this._shadowService?.shadowRoot || "", objType, `${objName}.gx`);
+      const shadowPath = path.join(
+        this._shadowService?.shadowRoot || "",
+        objType,
+        `${objName}.gx`,
+      );
       size = fs.existsSync(shadowPath) ? fs.statSync(shadowPath).size : 0;
     }
 
-    if (!this._cache.mtimes.has(uri.toString())) this._cache.mtimes.set(uri.toString(), Date.now());
+    if (!this._cache.mtimes.has(uri.toString()))
+      this._cache.mtimes.set(uri.toString(), Date.now());
 
     return {
       type: vscode.FileType.File,
@@ -142,31 +208,70 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
   }
 
   async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
-    const pathStr = decodeURIComponent(uri.path.substring(1));
-    const parentName = pathStr === "" ? "Root Module" : pathStr.split("/").pop()!;
-    const cacheKey = `dir:${pathStr}`;
-
-    const cached = this._cache.dirCache.get(cacheKey);
-    if (cached && Date.now() - cached.time < 300000) return cached.entries;
-
     try {
-      const query = VALID_TYPES.has(parentName) ? `type:${parentName}` : `parent:"${parentName}"`;
-      const result = await this.callGateway({ module: "Search", query: query, limit: 5000 });
+      console.log(`[GxFS] readDirectory START: ${uri.toString()}`);
+      const pathStr = decodeURIComponent(uri.path.substring(1));
+      console.log(`[GxFS] readDirectory pathStr: "${pathStr}"`);
+
+      const parentName =
+        pathStr === "" ? "Root Module" : pathStr.split("/").pop()!;
+      const cacheKey = `dir:${pathStr}`;
+
+      const cached = this._cache.dirCache.get(cacheKey);
+      if (cached && Date.now() - cached.time < 300000) {
+        console.log(`[GxFS] readDirectory CACHE HIT: ${cacheKey}`);
+        return cached.entries;
+      }
+
+      console.log(`[GxFS] readDirectory Fetching: ${parentName}`);
+      let query = VALID_TYPES.has(parentName)
+        ? `type:${parentName}`
+        : `parent:"${parentName}"`;
+
+      const result = await this.callGateway({
+        module: "Search",
+        action: "Query",
+        target: query,
+        limit: 5000,
+      });
+
+      console.log(
+        `[GxFS] readDirectory Gateway result received for ${parentName}`,
+      );
       const objects = result.results || (Array.isArray(result) ? result : []);
-      
+
+      console.log(
+        `[GxFS] readDirectory Gateway returned ${objects.length || 0} objects for ${parentName}`,
+      );
+      if (objects.length > 0) {
+        console.log(
+          `[GxFS] readDirectory First object example: ${JSON.stringify(objects[0]).substring(0, 100)}`,
+        );
+      }
+
       if (Array.isArray(objects)) {
         const mapped = objects.map((obj: any) => {
           const isDir = obj.type === "Folder" || obj.type === "Module";
-          const suffix = !isDir && TYPE_SUFFIX[obj.type] ? `.${TYPE_SUFFIX[obj.type]}` : "";
+          const suffix =
+            !isDir && TYPE_SUFFIX[obj.type] ? `.${TYPE_SUFFIX[obj.type]}` : "";
           const name = isDir ? obj.name : `${obj.name}${suffix}.gx`;
-          return [name, isDir ? vscode.FileType.Directory : vscode.FileType.File];
+          return [
+            name,
+            isDir ? vscode.FileType.Directory : vscode.FileType.File,
+          ];
         }) as [string, vscode.FileType][];
 
-        this._cache.dirCache.set(cacheKey, { entries: mapped, time: Date.now() });
+        console.log(
+          `[GxFS] readDirectory Mapped ${mapped.length} entries. Updating cache.`,
+        );
+        this._cache.dirCache.set(cacheKey, {
+          entries: mapped,
+          time: Date.now(),
+        });
         return mapped;
       }
     } catch (e) {
-      console.error(`[Nexus IDE] readDirectory error for ${parentName}:`, e);
+      console.error(`[GxFS] readDirectory error for ${uri.toString()}:`, e);
     }
     return [];
   }
@@ -182,17 +287,26 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     const shadowed = this._cache.metadataCache.get(uriStr + ":" + partName);
     if (shadowed) return Buffer.from(shadowed, "utf8");
 
-    if (this._cache.contentCache.has(uriStr)) return this._cache.contentCache.get(uriStr)!;
+    if (this._cache.contentCache.has(uriStr))
+      return this._cache.contentCache.get(uriStr)!;
 
     const cached = this._cache.readCache.get(cacheKey);
     if (cached && Date.now() - cached.time < 30000) return cached.data;
 
-    if (this._cache.pendingReadRequests.has(cacheKey)) return this._cache.pendingReadRequests.get(cacheKey)!;
+    if (this._cache.pendingReadRequests.has(cacheKey))
+      return this._cache.pendingReadRequests.get(cacheKey)!;
 
     const request = (async () => {
       const target = GxPartMapper.getObjectTarget(uri.path);
+      if (!target) {
+        return Buffer.alloc(0);
+      }
       try {
-        const allPartsResult = await this.callGateway({ module: "Read", action: "ExtractAllParts", target: target });
+        const allPartsResult = await this.callGateway({
+          module: "Read",
+          action: "ExtractAllParts",
+          target: target,
+        });
         if (allPartsResult && allPartsResult.parts) {
           const newPCache = new Map<string, Uint8Array>();
           for (const [p, content64] of Object.entries(allPartsResult.parts)) {
@@ -207,10 +321,18 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
           }
         }
 
-        const result = await this.callGateway({ module: "Read", action: "ExtractSource", target: target, part: partName });
-        const data = result && result.source 
-          ? (result.isBase64 ? Buffer.from(result.source, "base64") : Buffer.from(result.source, "utf8"))
-          : Buffer.from(`// Part not available: ${partName}`, "utf8");
+        const result = await this.callGateway({
+          module: "Read",
+          action: "ExtractSource",
+          target: target,
+          part: partName,
+        });
+        const data =
+          result && result.source
+            ? result.isBase64
+              ? Buffer.from(result.source, "base64")
+              : Buffer.from(result.source, "utf8")
+            : Buffer.from(`// Part not available: ${partName}`, "utf8");
 
         this._cache.readCache.set(cacheKey, { data, time: Date.now() });
         this._cache.contentCache.set(uriStr, data);
@@ -227,17 +349,28 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     return request;
   }
 
-  writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<void> {
+  writeFile(
+    uri: vscode.Uri,
+    content: Uint8Array,
+    options: { create: boolean; overwrite: boolean },
+  ): Promise<void> {
     return this._writeFile(uri, content, options);
   }
 
   async preWarm(uri: vscode.Uri): Promise<void> {
-    if (!this._cache.partsCache.has(uri.toString()) && !this._cache.pendingReadRequests.has(uri.toString())) {
+    if (
+      !this._cache.partsCache.has(uri.toString()) &&
+      !this._cache.pendingReadRequests.has(uri.toString())
+    ) {
       this.readFile(uri).catch(() => {});
     }
   }
 
-  private async _writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<void> {
+  private async _writeFile(
+    uri: vscode.Uri,
+    content: Uint8Array,
+    options: { create: boolean; overwrite: boolean },
+  ): Promise<void> {
     const target = GxPartMapper.getObjectTarget(uri.path);
     const partName = this.getPart(uri);
     const base64Source = Buffer.from(content).toString("base64");
@@ -246,11 +379,22 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     this._cache.mtimes.set(uri.toString(), Date.now());
 
     try {
-      const result = await this.callGateway({ module: "Write", target: target, action: partName, payload: base64Source });
+      const result = await this.callGateway({
+        module: "Write",
+        target: target,
+        action: partName,
+        payload: base64Source,
+      });
       if (!result || result.error || result.status === "Error") {
         if (result?.issues && this._diagnosticProvider) {
-          const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri.toString());
-          if (editor) this._diagnosticProvider.setDiagnostics(editor.document, result.issues);
+          const editor = vscode.window.visibleTextEditors.find(
+            (e) => e.document.uri.toString() === uri.toString(),
+          );
+          if (editor)
+            this._diagnosticProvider.setDiagnostics(
+              editor.document,
+              result.issues,
+            );
         }
         throw new Error(result?.error || "Save failed");
       }
@@ -265,11 +409,15 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     }
   }
 
-  public async triggerSave(uri: vscode.Uri, content: Uint8Array): Promise<void> {
+  public async triggerSave(
+    uri: vscode.Uri,
+    content: Uint8Array,
+  ): Promise<void> {
     return this._writeFile(uri, content, { create: false, overwrite: true });
   }
 
   public async callGateway(command: any, customTimeout?: number): Promise<any> {
+    console.log(`[GxFS] callGateway: ${command.module}`);
     if (!command.method) command.method = "execute_command";
     if (!command.params) command.params = { ...command }; // Compatibility with old internal structure
     return this._gateway.call(command, customTimeout);
@@ -277,10 +425,32 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
   public clearDirCache(): void {
     this._cache.clearDirectoryCache();
-    this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: vscode.Uri.parse("genexus:/") }]);
+    this._emitter.fire([
+      {
+        type: vscode.FileChangeType.Changed,
+        uri: vscode.Uri.from({ scheme: "gxkb18", path: "/" }),
+      },
+    ]);
   }
 
-  createDirectory(): void { throw vscode.FileSystemError.NoPermissions("Not supported"); }
-  delete(): void { throw vscode.FileSystemError.NoPermissions("Not supported"); }
-  rename(): void { throw vscode.FileSystemError.NoPermissions("Not supported"); }
+  createDirectory(uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions("Not supported");
+  }
+  delete(uri: vscode.Uri, options: { recursive: boolean }): void {
+    throw vscode.FileSystemError.NoPermissions("Not supported");
+  }
+  rename(
+    oldUri: vscode.Uri,
+    newUri: vscode.Uri,
+    options: { overwrite: boolean },
+  ): void {
+    throw vscode.FileSystemError.NoPermissions("Not supported");
+  }
+  copy(
+    source: vscode.Uri,
+    destination: vscode.Uri,
+    options: { overwrite: boolean },
+  ): void {
+    throw vscode.FileSystemError.NoPermissions("Not supported");
+  }
 }

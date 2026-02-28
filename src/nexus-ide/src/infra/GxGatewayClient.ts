@@ -26,9 +26,13 @@ export class GxGatewayClient {
 
       const data = JSON.stringify(command);
       const timeout = customTimeout || 60000;
-      
+
+      console.log(
+        `[GxGateway] Calling: ${this._baseUrl} with module ${command.module}...`,
+      );
+      const url = new URL(this._baseUrl);
       const req = http.request(
-        this._baseUrl,
+        url,
         {
           method: "POST",
           headers: {
@@ -38,16 +42,58 @@ export class GxGatewayClient {
           timeout: timeout,
         },
         (res) => {
+          console.log(
+            `[GxGateway] Response status: ${res.statusCode} for module: ${command.module}`,
+          );
           let body = "";
           res.on("data", (chunk) => (body += chunk));
           res.on("end", () => {
             try {
-              resolve(JSON.parse(body));
+              console.log(
+                `[GxGateway] Response body received (length: ${body.length})`,
+              );
+              const fullResponse = JSON.parse(body);
+
+              // NEW: Handle MCP Response Wrapper
+              if (fullResponse && fullResponse.result) {
+                const mcpResult = fullResponse.result;
+                if (
+                  mcpResult.content &&
+                  Array.isArray(mcpResult.content) &&
+                  mcpResult.content.length > 0
+                ) {
+                  const text = mcpResult.content[0].text;
+                  try {
+                    // If the text itself is JSON, parse it (standard for most our tools)
+                    if (
+                      text.trim().startsWith("{") ||
+                      text.trim().startsWith("[")
+                    ) {
+                      resolve(JSON.parse(text));
+                    } else {
+                      resolve(text);
+                    }
+                  } catch {
+                    resolve(text);
+                  }
+                  return;
+                }
+
+                // Fallback: If no content list, but has result, return the result directly
+                console.log(
+                  `[GxGateway] Found result wrapper but no content list.`,
+                );
+                resolve(fullResponse.result);
+                return;
+              }
+
+              console.log(`[GxGateway] No result wrapper found.`);
+              resolve(fullResponse);
             } catch {
               resolve(body);
             }
           });
-        }
+        },
       );
 
       req.on("timeout", () => {

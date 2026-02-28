@@ -10,12 +10,16 @@ import { GxFileSystemProvider } from "../gxFileSystem";
 export class McpDiscoveryManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly provider: GxFileSystemProvider
+    private readonly provider: GxFileSystemProvider,
   ) {}
 
   public async register() {
-    this.createLocalDiscoveryFile();
+    // Try to register tools first as they are critical for the LLM
     this.registerCopilotTools();
+
+    // Defer file creation to avoid triggering workspace updates during activation
+    setTimeout(() => this.createLocalDiscoveryFile(), 5000);
+
     this.registerCommands();
   }
 
@@ -27,9 +31,15 @@ export class McpDiscoveryManager {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return;
 
-    const rootPath = folders[0].uri.fsPath;
+    // Skip virtual folders
+    const physicalFolder = folders.find((f) => f.uri.scheme === "file");
+    if (!physicalFolder) return;
+
+    const rootPath = physicalFolder.uri.fsPath;
     const configPath = path.join(rootPath, ".mcp_config.json");
-    const port = vscode.workspace.getConfiguration().get("genexus.mcpPort", 5000);
+    const port = vscode.workspace
+      .getConfiguration()
+      .get("genexus.mcpPort", 5000);
 
     const config = {
       mcpServers: {
@@ -38,16 +48,21 @@ export class McpDiscoveryManager {
           url: `http://localhost:${port}/api/command`,
           name: "GeneXus MCP Server",
           version: "3.5.0",
-          capabilities: ["search", "read", "write", "build"]
-        }
-      }
+          capabilities: ["search", "read", "write", "build"],
+        },
+      },
     };
 
     try {
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-      console.log(`[McpDiscoveryManager] Discovery file created at ${configPath}`);
+      console.log(
+        `[McpDiscoveryManager] Discovery file created at ${configPath}`,
+      );
     } catch (e) {
-      console.error("[McpDiscoveryManager] Failed to create discovery file:", e);
+      console.error(
+        "[McpDiscoveryManager] Failed to create discovery file:",
+        e,
+      );
     }
   }
 
@@ -62,15 +77,34 @@ export class McpDiscoveryManager {
       const anyVscode = vscode as any;
       if (anyVscode.lm && anyVscode.lm.registerTool) {
         anyVscode.lm.registerTool("genexus_search", {
-          invoke: async (options: any) => {
-            return await this.provider.callGateway({ 
-              module: "Search", 
-              action: "Query", 
-              target: options.parameters.query 
+          invoke: async (options: any, _token: vscode.CancellationToken) => {
+            console.log(
+              `[McpDiscoveryManager] Tool invoked: genexus_search with query: ${options.parameters.query}`,
+            );
+            const result = await this.provider.callGateway({
+              method: "execute_command",
+              params: {
+                module: "Search",
+                action: "Query",
+                target: options.parameters.query,
+              },
             });
-          }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    typeof result === "string"
+                      ? result
+                      : JSON.stringify(result),
+                },
+              ],
+            };
+          },
         });
-        console.log("[McpDiscoveryManager] Registered GeneXus tools for VS Code LM.");
+        console.log(
+          "[McpDiscoveryManager] Registered 'genexus_search' tool for VS Code LM.",
+        );
       }
     } catch (e) {
       // Ignora se a API não estiver disponível
@@ -82,16 +116,20 @@ export class McpDiscoveryManager {
    */
   private registerCommands() {
     this.context.subscriptions.push(
-      vscode.commands.registerCommand("nexus-ide.registerMcpGlobally", async () => {
-        const choice = await vscode.window.showInformationMessage(
-          "Deseja registrar o GeneXus MCP no Claude Desktop?",
-          "Sim (Recomendado)", "Não"
-        );
+      vscode.commands.registerCommand(
+        "nexus-ide.registerMcpGlobally",
+        async () => {
+          const choice = await vscode.window.showInformationMessage(
+            "Deseja registrar o GeneXus MCP no Claude Desktop?",
+            "Sim (Recomendado)",
+            "Não",
+          );
 
-        if (choice === "Sim (Recomendado)") {
-          await this.updateClaudeConfig();
-        }
-      })
+          if (choice === "Sim (Recomendado)") {
+            await this.updateClaudeConfig();
+          }
+        },
+      ),
     );
   }
 
@@ -99,8 +137,16 @@ export class McpDiscoveryManager {
     const isWin = os.platform() === "win32";
     if (!isWin) return;
 
-    const claudePath = path.join(os.homedir(), "AppData", "Roaming", "Claude", "claude_desktop_config.json");
-    const port = vscode.workspace.getConfiguration().get("genexus.mcpPort", 5000);
+    const claudePath = path.join(
+      os.homedir(),
+      "AppData",
+      "Roaming",
+      "Claude",
+      "claude_desktop_config.json",
+    );
+    const port = vscode.workspace
+      .getConfiguration()
+      .get("genexus.mcpPort", 5000);
 
     try {
       let config: any = { mcpServers: {} };
@@ -111,13 +157,21 @@ export class McpDiscoveryManager {
       config.mcpServers = config.mcpServers || {};
       config.mcpServers.genexus = {
         command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-http", `http://localhost:${port}/api/command`]
+        args: [
+          "-y",
+          "@modelcontextprotocol/server-http",
+          `http://localhost:${port}/api/command`,
+        ],
       };
 
       fs.writeFileSync(claudePath, JSON.stringify(config, null, 2));
-      vscode.window.showInformationMessage("GeneXus MCP registrado no Claude Desktop com sucesso!");
+      vscode.window.showInformationMessage(
+        "GeneXus MCP registrado no Claude Desktop com sucesso!",
+      );
     } catch (e) {
-      vscode.window.showErrorMessage(`Falha ao atualizar config do Claude: ${e}`);
+      vscode.window.showErrorMessage(
+        `Falha ao atualizar config do Claude: ${e}`,
+      );
     }
   }
 }

@@ -22,15 +22,42 @@ namespace GxMcp.Worker.Services.Structure
         public JArray SerializeVisualLevel(TransactionLevel level)
         {
             var children = new JArray();
-            if (level.Attributes != null) { 
-                foreach (dynamic attr in level.Attributes) children.Add(VisualStructureMapper.MapAttribute(attr));
-            }
-            if (level.Levels != null)
-            {
-                foreach (dynamic subLevel in level.Levels) {
-                    var levelItem = new JObject { ["name"] = subLevel.Name, ["isLevel"] = true, ["children"] = SerializeVisualLevel(subLevel) };
-                    children.Add(levelItem);
+            if (level == null) return children;
+
+            try {
+                Logger.Info($"[VisualStructureService] Serializing level: {level.Name}");
+                
+                var attributes = level.Attributes;
+                if (attributes != null) { 
+                    Logger.Info($"[VisualStructureService] Processing {attributes.Count} attributes in {level.Name}");
+                    foreach (TransactionAttribute attr in attributes) {
+                        try {
+                            children.Add(VisualStructureMapper.MapAttribute(attr));
+                        } catch (Exception ex) {
+                            Logger.Error($"[VisualStructureService] Error mapping attribute in {level.Name}: {ex.Message}");
+                        }
+                    }
                 }
+
+                var subLevels = level.Levels;
+                if (subLevels != null)
+                {
+                    Logger.Info($"[VisualStructureService] Processing {subLevels.Count} sub-levels in {level.Name}");
+                    foreach (TransactionLevel subLevel in subLevels) {
+                        try {
+                            var levelItem = new JObject { 
+                                ["name"] = subLevel.Name, 
+                                ["isLevel"] = true, 
+                                ["children"] = SerializeVisualLevel(subLevel) 
+                            };
+                            children.Add(levelItem);
+                        } catch (Exception ex) {
+                            Logger.Error($"[VisualStructureService] Error mapping sub-level {subLevel.Name} in {level.Name}: {ex.Message}");
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                Logger.Error($"[VisualStructureService] Fatal error serializing level: {ex.Message}");
             }
             return children;
         }
