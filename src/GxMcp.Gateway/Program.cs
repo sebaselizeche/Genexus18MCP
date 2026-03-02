@@ -19,6 +19,7 @@ namespace GxMcp.Gateway
         private static ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingRequests = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
         private static ConcurrentDictionary<string, JObject> _semanticCache = new ConcurrentDictionary<string, JObject>();
         private static readonly string _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "gateway_debug.log");
+        private static readonly BlockingCollection<string> _logQueue = new BlockingCollection<string>();
 
         private static void InitializeLogging()
         {
@@ -41,16 +42,22 @@ namespace GxMcp.Gateway
                 }
             }
             
+            // Start background log writer
+            Task.Run(() => {
+                foreach (var msg in _logQueue.GetConsumingEnumerable())
+                {
+                    try { File.AppendAllText(_logPath, msg); }
+                    catch { }
+                }
+            });
+
             Log("=== Gateway starting (Stdio Mode) ===");
         }
 
         public static void Log(string msg)
         {
-            try { 
-                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                File.AppendAllText(_logPath, $"[{timestamp}] {msg}\n"); 
-            }
-            catch { }
+            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            _logQueue.Add($"[{timestamp}] {msg}\n");
         }
 
         static async Task Main(string[] args)

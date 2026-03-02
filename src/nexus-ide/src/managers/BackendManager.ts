@@ -84,17 +84,23 @@ export class BackendManager {
       return kbPath;
     }
 
-    console.log("[BackendManager] Searching for .gxw files...");
-    const files = await vscode.workspace.findFiles(
-      "{*.gxw,*/*.gxw}",
-      "**/node_modules/**",
-      1,
-    );
-    console.log(`[BackendManager] findFiles returned ${files.length} results.`);
-    if (files.length > 0) {
-      const found = path.dirname(files[0].fsPath);
-      console.log(`[BackendManager] Found KB at: ${found}`);
-      return found;
+    try {
+      console.log("[BackendManager] Searching for .gxw files...");
+      const files = await vscode.workspace.findFiles(
+        "*.gxw",
+        "**/node_modules/**",
+        1,
+      );
+      console.log(
+        `[BackendManager] findFiles returned ${files.length} results.`,
+      );
+      if (files.length > 0) {
+        const found = path.dirname(files[0].fsPath);
+        console.log(`[BackendManager] Found KB at: ${found}`);
+        return found;
+      }
+    } catch (e) {
+      console.error("[BackendManager] Error in findFiles:", e);
     }
 
     // Fallback for current project

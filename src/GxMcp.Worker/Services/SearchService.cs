@@ -37,7 +37,6 @@ namespace GxMcp.Worker.Services
 
                 IEnumerable<SearchIndex.IndexEntry> sourceSet = null;
 
-                // PERFORMANCE CRITICAL: If searching by parent, use the specialized index
                 if (!string.IsNullOrEmpty(criteria.ParentFilter) && index.ChildrenByParent != null)
                 {
                     if (index.ChildrenByParent.TryGetValue(criteria.ParentFilter, out var children))
@@ -54,21 +53,27 @@ namespace GxMcp.Worker.Services
                     sourceSet = index.Objects.Values;
                 }
 
-                // PLINQ Search: Ultra fast scan
                 var queryResults = sourceSet.AsParallel();
 
-                // 1. Apply Hard Filters
                 if (!string.IsNullOrEmpty(criteria.TypeFilter))
                     queryResults = queryResults.Where(e => IsTypeMatch(e.Type, criteria.TypeFilter));
                 
                 if (!string.IsNullOrEmpty(criteria.DomainFilter))
                     queryResults = queryResults.Where(e => string.Equals(e.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase));
 
-                // Parent filter is already applied if we used the specialized index, but double check for non-indexed cases
+                if (!string.IsNullOrEmpty(criteria.DescriptionFilter))
+                    queryResults = queryResults.Where(e => (e.Description ?? "").IndexOf(criteria.DescriptionFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (!string.IsNullOrEmpty(criteria.MetadataFilter))
+                    queryResults = queryResults.Where(e => 
+                        (e.ParmRule ?? "").IndexOf(criteria.MetadataFilter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        (e.DataType ?? "").IndexOf(criteria.MetadataFilter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        (e.RootTable ?? "").IndexOf(criteria.MetadataFilter, StringComparison.OrdinalIgnoreCase) >= 0
+                    );
+
                 if (!string.IsNullOrEmpty(criteria.ParentFilter) && (sourceSet == index.Objects.Values))
                     queryResults = queryResults.Where(e => string.Equals(e.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase));
 
-                // 2. Apply Semantic Filters (usedby:)
                 if (!string.IsNullOrEmpty(criteria.UsedByFilter))
                 {
                     queryResults = queryResults.Where(e => 
@@ -78,7 +83,6 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
-                // 3. Scoring and Finalizing - OPTIMIZED FOR SEMANTIC RELEVANCE
                 var scoredResults = queryResults
                     .Select(entry => {
                         int score = 0;
@@ -96,7 +100,6 @@ namespace GxMcp.Worker.Services
                     .Take(limit)
                     .ToList();
 
-                // OPTIMIZATION: If quick mode is requested (e.g. CTRL+P), return only essential fields
                 bool isQuick = false;
                 if (!string.IsNullOrEmpty(query) && query.Contains("@quick")) isQuick = true;
                 
@@ -135,8 +138,6 @@ namespace GxMcp.Worker.Services
 
                 _queryCache.TryAdd(cacheKey, json);
 
-                // PERFORMANCE: Object Warm-up (Background)
-                // Load the top 5 results into the SDK's internal cache to speed up subsequent Read/Analyze calls.
                 if (scoredResults.Count > 0)
                 {
                     var topGuids = scoredResults.Take(5)
@@ -149,7 +150,6 @@ namespace GxMcp.Worker.Services
                             var kb = _indexCacheService.KbService?.GetKB();
                             if (kb == null) return;
                             foreach (var guid in topGuids) {
-                                // Just calling .Get() triggers the SDK's object loader/caching mechanism
                                 var obj = kb.DesignModel.Objects.Get(guid);
                                 if (obj != null) Logger.Debug($"[Warm-up] Loaded {obj.Name} into SDK cache.");
                             }
@@ -169,21 +169,15 @@ namespace GxMcp.Worker.Services
             string desc = entry.Description ?? "";
             
             foreach (var term in terms) {
-                // Exact name match
                 if (name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 2000;
-                // Name starts with term
                 else if (name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
-                // Name contains term
                 else if (name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 500;
                 
-                // Description match
                 if (desc.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 300;
 
-                // Keyword/Tag match
                 if (entry.Keywords != null && entry.Keywords.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 800;
                 if (entry.Tags != null && entry.Tags.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 800;
 
-                // Structural context matches
                 if (entry.Tables != null && entry.Tables.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 400;
                 if (entry.Calls != null && entry.Calls.Contains(term, StringComparer.OrdinalIgnoreCase)) score += 400;
             }
@@ -204,19 +198,41 @@ namespace GxMcp.Worker.Services
             var c = new SearchCriteria();
             if (string.IsNullOrEmpty(query)) return c;
             
-            // Extract usedby:
-            if (query.Contains("usedby:")) {
-                var m = System.Text.RegularExpressions.Regex.Match(query, @"usedby:([\w\.]+)");
-                if (m.Success) { c.UsedByFilter = m.Groups[1].Value; query = query.Replace(m.Value, ""); }
+            if (query.Contains("description:")) {
+                var parts = query.Split(new[] { "description:" }, StringSplitOptions.None);
+                if (parts.Length > 1) {
+                    var val = parts[1].Split(' ')[0];
+                    c.DescriptionFilter = val.Replace("\"", "");
+                    query = query.Replace("description:" + val, "");
+                }
             }
-            // Extract parent:
+            if (query.Contains("metadata:")) {
+                var parts = query.Split(new[] { "metadata:" }, StringSplitOptions.None);
+                if (parts.Length > 1) {
+                    var val = parts[1].Split(' ')[0];
+                    c.MetadataFilter = val.Replace("\"", "");
+                    query = query.Replace("metadata:" + val, "");
+                }
+            }
+            if (query.Contains("usedby:")) {
+                var parts = query.Split(new[] { "usedby:" }, StringSplitOptions.None);
+                if (parts.Length > 1) {
+                    var val = parts[1].Split(' ')[0];
+                    c.UsedByFilter = val;
+                    query = query.Replace("usedby:" + val, "");
+                }
+            }
             if (query.Contains("parent:")) {
-                var m = System.Text.RegularExpressions.Regex.Match(query, "parent:\"?([^\"]+)\"?");
-                if (m.Success) { c.ParentFilter = m.Groups[1].Value; query = query.Replace(m.Value, ""); }
+                var parts = query.Split(new[] { "parent:" }, StringSplitOptions.None);
+                if (parts.Length > 1) {
+                    var val = parts[1].Split(' ')[0];
+                    c.ParentFilter = val.Replace("\"", "");
+                    query = query.Replace("parent:" + val, "");
+                }
             }
 
             foreach (var part in query.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries)) {
-                c.Terms.Add(part.ToLowerInvariant()); // Store terms lowercased once
+                c.Terms.Add(part.ToLowerInvariant());
             }
             return c;
         }
@@ -225,6 +241,7 @@ namespace GxMcp.Worker.Services
         private class SearchCriteria { 
             public string TypeFilter { get; set; } public string ParentFilter { get; set; } 
             public string UsedByFilter { get; set; } public string DomainFilter { get; set; } 
+            public string DescriptionFilter { get; set; } public string MetadataFilter { get; set; }
             public HashSet<string> Terms { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase); 
         }
     }

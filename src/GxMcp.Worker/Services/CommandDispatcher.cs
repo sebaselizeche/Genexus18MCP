@@ -42,6 +42,8 @@ namespace GxMcp.Worker.Services
         private readonly VersionControlService _versionControlService;
         private readonly ConversionService _conversionService;
         private readonly SelfTestService _selfTestService;
+        private readonly NavigationService _navigationService;
+        private readonly PatternAnalysisService _patternAnalysisService;
 
         private CommandDispatcher()
         {
@@ -52,9 +54,9 @@ namespace GxMcp.Worker.Services
             _objectService = new ObjectService(_kbService, _buildService);
             _writeService = new WriteService(_objectService);
             _listService = new ListService(_kbService);
-            _analyzeService = new AnalyzeService(_kbService, _objectService, _indexCacheService);
             _dataInsightService = new DataInsightService(_kbService, _objectService);
             _uiService = new UIService(_kbService, _objectService);
+            _analyzeService = new AnalyzeService(_kbService, _objectService, _indexCacheService, _uiService);
             _objectService.SetDataInsightService(_dataInsightService);
             _objectService.SetUIService(_uiService);
             _refactorService = new RefactorService(_kbService, _objectService, _indexCacheService);
@@ -67,7 +69,8 @@ namespace GxMcp.Worker.Services
             _historyService = new HistoryService(_objectService, _writeService);
             _visualizerService = new VisualizerService();
             _healthService = new HealthService();
-            _linterService = new LinterService(_objectService);
+            _navigationService = new NavigationService(_kbService);
+            _linterService = new LinterService(_objectService, _navigationService);
             _patternService = new PatternService(_indexCacheService, _objectService);
             _patchService = new PatchService(_objectService, _writeService);
             _sdtService = new SDTService(_objectService);
@@ -77,6 +80,7 @@ namespace GxMcp.Worker.Services
             _versionControlService = new VersionControlService(_kbService);
             _conversionService = new ConversionService(_objectService);
             _selfTestService = new SelfTestService(_kbService, _searchService, _linterService);
+            _patternAnalysisService = new PatternAnalysisService(_objectService);
         }
 
         public static CommandDispatcher Instance
@@ -152,7 +156,10 @@ namespace GxMcp.Worker.Services
                         case "Analyze":
                             if (action == "GetHierarchy") return _analyzeService.GetHierarchy(target);
                             if (action == "GetDataContext") return _dataInsightService.GetDataContext(target);
-                            if (action == "GetParameters") return _analyzeService.GetParameters(target);
+                            if (action == "GetParameters") return _analyzeService.GetSignature(target);
+                            if (action == "GetConversionContext") return _analyzeService.GetConversionContext(target);
+                            if (action == "GetNavigation") return _navigationService.GetNavigation(target);
+                            if (action == "GetPatternMetadata") return _patternAnalysisService.GetWWPStructure(target);
                             if (action == "ExplainCode") return _analyzeService.ExplainCode(target, payload);
                             if (action == "TranslateTo") return _conversionService.TranslateTo(target, @params["language"]?.ToString());
                             return _analyzeService.Analyze(target);
@@ -186,6 +193,7 @@ namespace GxMcp.Worker.Services
                             if (action == "GetVisualStructure") return _structureService.GetVisualStructure(target);
                             if (action == "GetVisualIndexes") return _structureService.GetVisualIndexes(target);
                             if (action == "UpdateVisualStructure") return _structureService.UpdateVisualStructure(target, payload);
+                            if (action == "GetLogicStructure") return _structureService.GetLogicStructure(target);
                             return _sdtService.GetSDTStructure(target);
                         case "Formatting": return _formatService.Format(payload);
                     }

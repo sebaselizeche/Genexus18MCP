@@ -39,12 +39,18 @@ namespace GxMcp.Worker.Services
                 if (obj is WebPanel wbp)
                 {
                     var part = wbp.Parts.Get<WebFormPart>();
-                    if (part != null) result["html"] = GenerateEnhancedHTML(obj, part);
+                    if (part != null) {
+                        result["html"] = GenerateEnhancedHTML(obj, part);
+                        result["structure"] = GetSimplifiedUIStructure(obj, part);
+                    }
                 }
                 else if (obj is Transaction trn)
                 {
                     var part = trn.Parts.Get<WebFormPart>();
-                    if (part != null) result["html"] = GenerateEnhancedHTML(obj, part);
+                    if (part != null) {
+                        result["html"] = GenerateEnhancedHTML(obj, part);
+                        result["structure"] = GetSimplifiedUIStructure(obj, part);
+                    }
                 }
 
                 return result.ToString();
@@ -53,6 +59,58 @@ namespace GxMcp.Worker.Services
             {
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        public JObject GetSimplifiedUIStructure(KBObject obj, WebFormPart part = null)
+        {
+            if (part == null) {
+                if (obj is WebPanel wbp) part = wbp.Parts.Get<WebFormPart>();
+                else if (obj is Transaction trn) part = trn.Parts.Get<WebFormPart>();
+            }
+
+            if (part == null || part.Document == null || part.Document.DocumentElement == null) return new JObject();
+
+            try {
+                var tree = WebFormHelper.GetWebTagTree(obj, part.Document.DocumentElement);
+                if (tree != null && tree.Root != null) {
+                    return RenderSimplifiedNode(tree);
+                }
+            } catch {}
+            return new JObject();
+        }
+
+        private JObject RenderSimplifiedNode(Tree<IWebTag> node)
+        {
+            var result = new JObject();
+            if (node == null || node.Root == null) return result;
+
+            IWebTag tag = node.Root;
+            result["type"] = tag.Type.ToString();
+            
+            string controlName = tag.ValStr("ControlName");
+            if (!string.IsNullOrEmpty(controlName)) result["name"] = controlName;
+
+            string caption = tag.ValStr("Caption") ?? tag.ValStr("CaptionExpression");
+            if (!string.IsNullOrEmpty(caption)) result["caption"] = caption;
+
+            string cls = tag.ValStr("Class");
+            if (!string.IsNullOrEmpty(cls)) result["class"] = cls;
+
+            string att = tag.ValStr("Attribute") ?? tag.ValStr("Variable");
+            if (!string.IsNullOrEmpty(att)) result["dataBinding"] = att;
+
+            if (node.Children != null && node.Children.Count > 0)
+            {
+                var children = new JArray();
+                foreach (var child in node.Children)
+                {
+                    var childJson = RenderSimplifiedNode(child);
+                    if (childJson.Count > 0) children.Add(childJson);
+                }
+                if (children.Count > 0) result["children"] = children;
+            }
+
+            return result;
         }
 
         private string GenerateEnhancedHTML(KBObject obj, WebFormPart part)

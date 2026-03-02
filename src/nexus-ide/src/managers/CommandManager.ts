@@ -321,7 +321,10 @@ export class CommandManager {
                 const suffix = TYPE_SUFFIX[selectedType]
                   ? `.${TYPE_SUFFIX[selectedType]}`
                   : "";
-                const uri = vscode.Uri.parse(`genexus:/${name}${suffix}.gx`);
+                const uri = vscode.Uri.from({
+                  scheme: "gxkb18",
+                  path: `/${selectedType}/${name}${suffix}.gx`,
+                });
                 await vscode.commands.executeCommand("vscode.open", uri);
                 this.provider.clearDirCache();
                 this.treeProvider.refresh();

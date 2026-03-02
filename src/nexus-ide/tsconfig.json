@@ -3,12 +3,22 @@
     "module": "Node16",
     "target": "ES2022",
     "outDir": "out",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "sourceMap": true,
     "strict": true,
     "noImplicitAny": true,
     "moduleResolution": "Node16",
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "types": [
+      "node",
+      "vscode"
+    ]
   },
-  "exclude": ["node_modules", ".vscode-test"]
+  "exclude": [
+    "node_modules",
+    ".vscode-test"
+  ]
 }

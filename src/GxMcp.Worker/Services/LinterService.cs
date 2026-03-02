@@ -13,10 +13,12 @@ namespace GxMcp.Worker.Services
     public class LinterService
     {
         private readonly ObjectService _objectService;
+        private readonly NavigationService _navigationService;
 
-        public LinterService(ObjectService objectService)
+        public LinterService(ObjectService objectService, NavigationService navigationService)
         {
             _objectService = objectService;
+            _navigationService = navigationService;
         }
 
         public string Lint(string target, string specificPart = null)
@@ -65,6 +67,9 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
+                // Integration with Navigation Intelligence
+                CheckNavigationPerformance(target, issues);
+
                 var sdkIssues = SdkDiagnosticsHelper.GetDiagnostics(obj);
                 foreach (var issue in sdkIssues) issues.Add(issue);
 
@@ -79,6 +84,36 @@ namespace GxMcp.Worker.Services
             {
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private void CheckNavigationPerformance(string target, JArray issues)
+        {
+            try
+            {
+                string navJson = _navigationService.GetNavigation(target);
+                if (navJson.StartsWith("{") && !navJson.Contains("error"))
+                {
+                    var nav = JObject.Parse(navJson);
+                    var levels = nav["levels"] as JArray;
+                    if (levels != null)
+                    {
+                        foreach (var level in levels)
+                        {
+                            bool isOptimized = level["isOptimized"]?.Value<bool>() ?? false;
+                            string index = level["index"]?.ToString();
+                            string type = level["type"]?.ToString();
+
+                            if (type == "For Each" && string.IsNullOrEmpty(index) && !isOptimized)
+                            {
+                                int line = level["line"]?.Value<int>() ?? 0;
+                                string table = level["baseTable"]?.ToString() ?? "unknown";
+                                issues.Add(CreateIssue("GX013", "Confirmed Full Scan", "Error", $"Navigation confirms a FULL SCAN on table '{table}'. No index used and no optimizations found.", "For Each", line, "Navigation"));
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private string GetPartName(KBObjectPart part)
@@ -97,6 +132,21 @@ namespace GxMcp.Worker.Services
             CheckSleepWait(cleanCode, issues, originalCode, partName);
             CheckDynamicCall(cleanCode, issues, originalCode, partName);
             CheckNewWhenDuplicate(cleanCode, issues, originalCode, partName);
+            CheckDirectTableAccess(cleanCode, issues, originalCode, partName);
+        }
+
+        private void CheckDirectTableAccess(string cleanCode, JArray issues, string originalCode, string partName)
+        {
+            // Only relevant for UI objects like WebPanels where direct access is discouraged in some architectures
+            if (partName.Equals("Events", StringComparison.OrdinalIgnoreCase))
+            {
+                var forEachBlocks = Regex.Matches(cleanCode, @"(?is)\bfor\s+each\b\s*.*?\s*\bendfor\b", RegexOptions.Compiled);
+                foreach (Match m in forEachBlocks)
+                {
+                    int line = GetLineNumber(originalCode, m.Index);
+                    issues.Add(CreateIssue("GX012", "Direct Table Access in UI", "Info", "Direct 'For Each' in UI events detected. Consider using Data Providers for better separation of concerns.", "For Each", line, partName));
+                }
+            }
         }
 
         private void CheckNestedForEach(string cleanCode, JArray issues, string originalCode, string partName)

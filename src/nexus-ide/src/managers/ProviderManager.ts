@@ -18,27 +18,67 @@ export class ProviderManager {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly provider: GxFileSystemProvider
+    private readonly provider: GxFileSystemProvider,
   ) {}
 
   register() {
     const callGateway = (cmd: any) => this.provider.callGateway(cmd);
 
     this.context.subscriptions.push(
-      vscode.languages.registerDocumentSymbolProvider("genexus", new GxDocumentSymbolProvider()),
-      vscode.languages.registerDefinitionProvider("genexus", new GxDefinitionProvider(callGateway)),
-      vscode.languages.registerHoverProvider("genexus", new GxHoverProvider(callGateway)),
-      vscode.languages.registerCompletionItemProvider("genexus", new GxCompletionItemProvider(callGateway), ".", "&"),
-      vscode.languages.registerInlineCompletionItemProvider("genexus", new GxInlineCompletionItemProvider()),
-      vscode.languages.registerSignatureHelpProvider("genexus", new GxSignatureHelpProvider(callGateway), "(", ","),
-      vscode.languages.registerCodeActionsProvider("genexus", new GxCodeActionProvider(callGateway), {
-        providedCodeActionKinds: [GxCodeActionProvider.kind],
-      }),
-      vscode.languages.registerRenameProvider("genexus", new GxRenameProvider(callGateway)),
-      vscode.languages.registerDocumentFormattingEditProvider("genexus", new GxFormatProvider(callGateway)),
-      vscode.languages.registerWorkspaceSymbolProvider(new GxWorkspaceSymbolProvider(callGateway)),
-      vscode.languages.registerCodeLensProvider("genexus", new GxCodeLensProvider(callGateway)),
-      vscode.languages.registerReferenceProvider("genexus", new GxReferenceProvider(callGateway))
+      vscode.languages.registerDocumentSymbolProvider(
+        "genexus",
+        new GxDocumentSymbolProvider(),
+      ),
+      vscode.languages.registerDefinitionProvider(
+        "genexus",
+        new GxDefinitionProvider(callGateway),
+      ),
+      vscode.languages.registerHoverProvider(
+        "genexus",
+        new GxHoverProvider(callGateway),
+      ),
+      vscode.languages.registerCompletionItemProvider(
+        "genexus",
+        new GxCompletionItemProvider(callGateway),
+        ".",
+        "&",
+      ),
+      vscode.languages.registerInlineCompletionItemProvider(
+        "genexus",
+        new GxInlineCompletionItemProvider(),
+      ),
+      vscode.languages.registerSignatureHelpProvider(
+        "genexus",
+        new GxSignatureHelpProvider(callGateway),
+        "(",
+        ",",
+      ),
+      vscode.languages.registerCodeActionsProvider(
+        "genexus",
+        new GxCodeActionProvider(callGateway),
+        {
+          providedCodeActionKinds: [GxCodeActionProvider.kind],
+        },
+      ),
+      vscode.languages.registerRenameProvider(
+        "genexus",
+        new GxRenameProvider(callGateway),
+      ),
+      vscode.languages.registerDocumentFormattingEditProvider(
+        "genexus",
+        new GxFormatProvider(callGateway),
+      ),
+      vscode.languages.registerWorkspaceSymbolProvider(
+        new GxWorkspaceSymbolProvider(callGateway),
+      ),
+      vscode.languages.registerCodeLensProvider(
+        "genexus",
+        new GxCodeLensProvider(callGateway),
+      ),
+      vscode.languages.registerReferenceProvider(
+        "genexus",
+        new GxReferenceProvider(callGateway),
+      ),
     );
 
     this.registerHistoryProvider();
@@ -46,7 +86,9 @@ export class ProviderManager {
   }
 
   private registerHistoryProvider() {
-    this.historyProvider = new (class implements vscode.TextDocumentContentProvider {
+    this.historyProvider = new (class
+      implements vscode.TextDocumentContentProvider
+    {
       private _data = new Map<string, string>();
       provideTextDocumentContent(uri: vscode.Uri): string {
         return this._data.get(uri.toString()) || "";
@@ -61,28 +103,39 @@ export class ProviderManager {
       }
     })();
     this.context.subscriptions.push(
-      vscode.workspace.registerTextDocumentContentProvider("gx-history", this.historyProvider)
+      vscode.workspace.registerTextDocumentContentProvider(
+        "gx-history",
+        this.historyProvider,
+      ),
     );
   }
 
   private registerFileSearchProvider() {
     if ((vscode.workspace as any).registerFileSearchProvider) {
-      (vscode.workspace as any).registerFileSearchProvider("genexus", {
-        provideFileSearchResults: async (query: any, _options: any, token: vscode.CancellationToken): Promise<vscode.Uri[]> => {
+      (vscode.workspace as any).registerFileSearchProvider("gxkb18", {
+        provideFileSearchResults: async (
+          query: any,
+          _options: any,
+          token: vscode.CancellationToken,
+        ): Promise<vscode.Uri[]> => {
           try {
             const pattern = query.pattern || "";
             if (pattern.length < 2) return [];
 
             const result = await this.provider.callGateway({
               method: "execute_command",
-              params: { module: "Search", target: pattern + " @quick", limit: 100 },
+              params: {
+                module: "Search",
+                target: pattern + " @quick",
+                limit: 100,
+              },
             });
 
             if (token.isCancellationRequested) return [];
 
             if (result && result.results) {
               return result.results.map((obj: any) =>
-                vscode.Uri.parse(`genexus:/${obj.type}/${obj.name}.gx`)
+                vscode.Uri.parse(`gxkb18:/${obj.type}/${obj.name}.gx`),
               );
             }
           } catch (e) {

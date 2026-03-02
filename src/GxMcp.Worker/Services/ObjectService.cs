@@ -44,13 +44,13 @@ namespace GxMcp.Worker.Services
 
                 // Map string type to Guid
                 Guid typeGuid = Guid.Empty;
-                if (type.Equals("Procedure", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Procedure>().Id;
-                else if (type.Equals("Transaction", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Transaction>().Id;
-                else if (type.Equals("WebPanel", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.WebPanel>().Id;
-                else if (type.Equals("SDT", StringComparison.OrdinalIgnoreCase) || type.Equals("StructuredDataType", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.SDT>().Id;
-                else if (type.Equals("DataProvider", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.DataProvider>().Id;
-                else if (type.Equals("Attribute", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Attribute>().Id;
-                else if (type.Equals("Table", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<global::Artech.Genexus.Common.Objects.Table>().Id;
+                if (type.Equals("Procedure", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Procedure>().Id;
+                else if (type.Equals("Transaction", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Transaction>().Id;
+                else if (type.Equals("WebPanel", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.WebPanel>().Id;
+                else if (type.Equals("SDT", StringComparison.OrdinalIgnoreCase) || type.Equals("StructuredDataType", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.SDT>().Id;
+                else if (type.Equals("DataProvider", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.DataProvider>().Id;
+                else if (type.Equals("Attribute", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Attribute>().Id;
+                else if (type.Equals("Table", StringComparison.OrdinalIgnoreCase)) typeGuid = KBObjectDescriptor.Get<Artech.Genexus.Common.Objects.Table>().Id;
                 else if (type.Equals("SDPanel", StringComparison.OrdinalIgnoreCase)) typeGuid = Guid.Parse("702119eb-90e9-4e78-958b-96d5e182283a"); // SDPanel Guid
 
                 if (typeGuid == Guid.Empty) return "{\"status\":\"Error\", \"error\":\"Unsupported object type: " + type + "\"}";
@@ -59,14 +59,32 @@ namespace GxMcp.Worker.Services
                 newObj.Name = name;
                 
                 // Initialize with some default content if possible
-                if (newObj is global::Artech.Genexus.Common.Objects.Procedure proc)
+                if (newObj.GetType().Name == "Procedure")
                 {
-                    proc.ProcedurePart.Source = "// Procedure: " + name + "\n\n";
+                    var partProp = newObj.GetType().GetProperty("ProcedurePart");
+                    if (partProp != null) {
+                        object part = partProp.GetValue(newObj);
+                        if (part != null) {
+                            var sourceProp = part.GetType().GetProperty("Source");
+                            if (sourceProp != null) sourceProp.SetValue(part, "// Procedure: " + name + "\n\n");
+                        }
+                    }
                 }
-                else if (newObj is global::Artech.Genexus.Common.Objects.DataProvider dp)
+                else if (newObj.GetType().Name == "DataProvider")
                 {
-                    var part = dp.Parts.Get<SourcePart>();
-                    if (part != null) part.Source = "// Data Provider: " + name + "\n\n";
+                    var partsProp = newObj.GetType().GetProperty("Parts");
+                    if (partsProp != null) {
+                        var parts = (System.Collections.IEnumerable)partsProp.GetValue(newObj);
+                        foreach (object p in parts)
+                        {
+                            if (p.GetType().Name == "SourcePart")
+                            {
+                                var sourceProp = p.GetType().GetProperty("Source");
+                                if (sourceProp != null) sourceProp.SetValue(p, "// Data Provider: " + name + "\n\n");
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 newObj.Save();
@@ -230,14 +248,14 @@ namespace GxMcp.Worker.Services
             }.ToString();
         }
 
-        public string ReadObjectSource(string target, string partName, int? offset = null, int? limit = null, string client = "ide")
+        public string ReadObjectSource(string target, string partName, int? offset = null, int? limit = null, string client = "ide", bool minimize = false)
         {
             var obj = FindObject(target);
             if (obj == null) return HealingService.FormatNotFoundError(target, GetIndex());
-            return ReadObjectSourceInternal(obj, partName, offset, limit, client);
+            return ReadObjectSourceInternal(obj, partName, offset, limit, client, minimize);
         }
 
-        private string ReadObjectSourceInternal(KBObject obj, string partName, int? offset = null, int? limit = null, string client = "ide")
+        private string ReadObjectSourceInternal(KBObject obj, string partName, int? offset = null, int? limit = null, string client = "ide", bool minimize = false)
         {
             Logger.Info($"ReadObjectSourceInternal: {obj.Name} (Part: {partName}, Client: {client})");
             var sw = Stopwatch.StartNew();
@@ -284,7 +302,7 @@ namespace GxMcp.Worker.Services
                             part = p;
                             break;
                         }
-                        if (p is global::Artech.Genexus.Common.Parts.VariablesPart && partName.Equals("Variables", StringComparison.OrdinalIgnoreCase))
+                        if (p.GetType().Name.Equals("VariablesPart") && partName.Equals("Variables", StringComparison.OrdinalIgnoreCase))
                         {
                             part = p;
                             break;
@@ -298,7 +316,7 @@ namespace GxMcp.Worker.Services
                 // We process this BEFORE the generic part check because Tables might not have a physical Part GUID mapped,
                 // and even if they do, we want our custom DSL representation.
                 if (partName.Equals("Structure", StringComparison.OrdinalIgnoreCase) && 
-                        (obj is global::Artech.Genexus.Common.Objects.Transaction || obj is global::Artech.Genexus.Common.Objects.Table || obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase)))
+                        (obj.GetType().Name == "Transaction" || obj.GetType().Name == "Table" || obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase)))
                 {
                     string structureText = StructureParser.SerializeToText(obj);
                     ProcessTextResponse(structureText, result, client);
@@ -313,15 +331,19 @@ namespace GxMcp.Worker.Services
                 }
 
                 // Handle Variables Part specially
-                if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
+                if (part.GetType().Name.Equals("VariablesPart"))
                 {
-                    string varText = VariableInjector.GetVariablesAsText(varPart);
+                    string varText = VariableInjector.GetVariablesAsText((dynamic)part);
                     ProcessTextResponse(varText, result, client);
                     Logger.Info("ReadSource (Variables) SUCCESS");
                 }
                 else if (part is ISource sourcePart)
                 {
                     string content = sourcePart.Source ?? "";
+                    if (minimize && content.Length > 5000)
+                    {
+                        content = content.Substring(0, 2500) + "\n... [TRUNCATED FOR BREVITY - USE PAGINATION] ...\n" + content.Substring(content.Length - 1000);
+                    }
                     ProcessSourceContent(obj, content, offset, limit, result, client);
                     Logger.Info("ReadSource (ISource) SUCCESS");
                 }
@@ -334,6 +356,10 @@ namespace GxMcp.Worker.Services
                     if (contentProp != null && contentProp.CanRead && contentProp.PropertyType == typeof(string))
                     {
                         string content = (string)contentProp.GetValue(part) ?? "";
+                        if (minimize && content.Length > 5000)
+                        {
+                            content = content.Substring(0, 2500) + "\n... [TRUNCATED FOR BREVITY] ...\n" + content.Substring(content.Length - 1000);
+                        }
                         ProcessSourceContent(obj, content, offset, limit, result, client);
                         Logger.Info("ReadSource (Reflection) SUCCESS");
                     }
@@ -400,8 +426,8 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                global::Artech.Genexus.Common.Parts.VariablesPart varPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.VariablesPart>();
-                if (varPart == null || varPart.Variables.Count == 0) return;
+                var varPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
+                if (varPart == null) return;
 
                 var referencedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var matches = System.Text.RegularExpressions.Regex.Matches(source, @"&(\w+)");
@@ -412,16 +438,26 @@ namespace GxMcp.Worker.Services
                 if (referencedVars.Count == 0) return;
 
                 var variables = new JArray();
-                foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
+                var varListProp = varPart.GetType().GetProperty("Variables");
+                if (varListProp != null)
                 {
-                    if (referencedVars.Contains(v.Name))
+                    var varList = varListProp.GetValue(varPart) as System.Collections.IEnumerable;
+                    if (varList != null)
                     {
-                        variables.Add(new JObject {
-                            ["name"] = v.Name,
-                            ["type"] = v.Type.ToString(),
-                            ["length"] = v.Length,
-                            ["decimals"] = v.Decimals
-                        });
+                        foreach (object vObj in varList)
+                        {
+                            dynamic v = vObj;
+                            string vName = v.Name;
+                            if (referencedVars.Contains(vName))
+                            {
+                                variables.Add(new JObject {
+                                    ["name"] = vName,
+                                    ["type"] = v.Type.ToString(),
+                                    ["length"] = Convert.ToInt32(v.Length),
+                                    ["decimals"] = Convert.ToInt32(v.Decimals)
+                                });
+                            }
+                        }
                     }
                 }
                 if (variables.Count > 0) result["variables"] = variables;
@@ -490,6 +526,67 @@ namespace GxMcp.Worker.Services
             }
 
             return GetPartGuid(p);
+        }
+
+        public class ParameterInfo
+        {
+            public string Name { get; set; }
+            public string Accessor { get; set; }
+            public string Type { get; set; }
+        }
+
+        public (string parmRule, List<ParameterInfo> parameters) GetParametersInternal(KBObject obj)
+        {
+            string parmRule = "";
+            var parameters = new List<ParameterInfo>();
+
+            try
+            {
+                if (obj is Procedure proc) parmRule = proc.Rules.Source.Split('\n').FirstOrDefault(l => l.Trim().StartsWith("parm(", StringComparison.OrdinalIgnoreCase));
+                else if (obj is Transaction trn) parmRule = trn.Rules.Source.Split('\n').FirstOrDefault(l => l.Trim().StartsWith("parm(", StringComparison.OrdinalIgnoreCase));
+                else if (obj is WebPanel wp) parmRule = wp.Rules.Source.Split('\n').FirstOrDefault(l => l.Trim().StartsWith("parm(", StringComparison.OrdinalIgnoreCase));
+                else if (obj is DataProvider dp) parmRule = (string)dp.GetType().GetProperty("Rules")?.GetValue(dp)?.GetType().GetProperty("Source")?.GetValue(((dynamic)dp).Rules) ?? "";
+                
+                if (string.IsNullOrEmpty(parmRule) && obj is DataProvider dp2) {
+                    // DataProvider might have parm in Source instead of Rules in some versions/objects
+                    try { 
+                        string sourceStr = ((dynamic)dp2).Source.Source;
+                        foreach (string line in sourceStr.Split('\n'))
+                        {
+                            if (line.Trim().StartsWith("parm(", StringComparison.OrdinalIgnoreCase))
+                            {
+                                parmRule = line;
+                                break;
+                            }
+                        }
+                    } catch {}
+                }
+
+                if (!string.IsNullOrEmpty(parmRule))
+                {
+                    parmRule = parmRule.Trim();
+                    var match = System.Text.RegularExpressions.Regex.Match(parmRule, @"parm\s*\((.*)\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (match.Success)
+                    {
+                        var parmContent = match.Groups[1].Value;
+                        var parts = parmContent.Split(',');
+                        foreach (var part in parts)
+                        {
+                            var p = part.Trim();
+                            var pInfo = new ParameterInfo { Name = p, Accessor = "in", Type = "Unknown" };
+                            if (p.StartsWith("inout:", StringComparison.OrdinalIgnoreCase)) { pInfo.Accessor = "inout"; pInfo.Name = p.Substring(6).Trim(); }
+                            else if (p.StartsWith("in:", StringComparison.OrdinalIgnoreCase)) { pInfo.Accessor = "in"; pInfo.Name = p.Substring(3).Trim(); }
+                            else if (p.StartsWith("out:", StringComparison.OrdinalIgnoreCase)) { pInfo.Accessor = "out"; pInfo.Name = p.Substring(4).Trim(); }
+                            
+                            if (pInfo.Name.StartsWith("&")) pInfo.Name = pInfo.Name.Substring(1);
+                            parameters.Add(pInfo);
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return (parmRule, parameters);
         }
     }
 }

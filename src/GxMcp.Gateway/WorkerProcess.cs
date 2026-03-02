@@ -183,9 +183,13 @@ namespace GxMcp.Gateway
 
         private void StopProcess()
         {
-            if (_process != null && !_process.HasExited) {
-                try { _process.Kill(); } catch { }
-                _process.Dispose();
+            if (_process != null) {
+                try { 
+                    if (!_process.HasExited) _process.Kill(); 
+                    _process.Dispose();
+                } catch (Exception ex) { 
+                    Program.Log($"[Gateway] Error during process cleanup: {ex.Message}");
+                }
                 _process = null;
             }
         }

@@ -29,20 +29,24 @@ namespace GxMcp.Worker.Services.Structure
                 try { 
                     if (attr is TransactionAttribute trnAttr) attrObj = trnAttr.Attribute;
                     else if (attr is TableAttribute tblAttr) attrObj = tblAttr.Attribute;
-                    else attrObj = attr.Attribute; 
+                    else {
+                        // Reflection as fallback for "Attribute" property
+                        var p = attr.GetType().GetProperty("Attribute");
+                        if (p != null) attrObj = p.GetValue(attr) as Artech.Genexus.Common.Objects.Attribute;
+                    }
                 } catch { }
 
                 if (attrObj != null) {
                     try { 
-                        if (attrObj.Type != null) typeStr = attrObj.Type.ToString(); 
+                        typeStr = attrObj.Type.ToString(); 
                     } catch { }
 
                     try { desc = attrObj.Description?.ToString() ?? ""; } catch { }
-                    try { formula = attrObj.Formula?.ToString() ?? ""; } catch { }
+                    try { formula = (string)attrObj.GetType().GetProperty("Formula")?.GetValue(attrObj)?.ToString() ?? ""; } catch { }
                     
                     try {
-                        int len = (int)attrObj.Length;
-                        int dec = (int)attrObj.Decimals;
+                        int len = Convert.ToInt32(attrObj.Length);
+                        int dec = Convert.ToInt32(attrObj.Decimals);
                         if (len > 0) typeStr += (dec > 0) ? $"({len},{dec})" : $"({len})";
                     } catch { }
                 }
@@ -54,8 +58,7 @@ namespace GxMcp.Worker.Services.Structure
 
                 // Nullable handling
                 try {
-                    // Try to cast to the specific enum type we found earlier
-                    int nVal = (int)attr.IsNullable;
+                    int nVal = Convert.ToInt32(attr.IsNullable);
                     isNullable = (nVal == 1) ? "Yes" : (nVal == 2 ? "Managed" : "No");
                 } catch { }
             } catch (Exception ex) {
@@ -71,7 +74,9 @@ namespace GxMcp.Worker.Services.Structure
 
         public static void SyncAttributeProperties(dynamic targetAttr, JToken vItem, HashSet<KBObject> modifiedTracker)
         {
-            if (targetAttr.Attribute == null) return;
+            Artech.Genexus.Common.Objects.Attribute attrObj = null;
+            try { attrObj = targetAttr.Attribute; } catch { }
+            if (attrObj == null) return;
 
             string desc = vItem["description"]?.ToString();
             string formula = vItem["formula"]?.ToString();
@@ -80,27 +85,39 @@ namespace GxMcp.Worker.Services.Structure
 
             bool isModified = false;
 
-            if (desc != null && targetAttr.Attribute.Description != desc) {
-                targetAttr.Attribute.Description = desc; isModified = true;
+            if (desc != null && attrObj.Description != desc) {
+                attrObj.Description = desc; isModified = true;
             }
 
             if (formula != null) {
-                string current = targetAttr.Attribute.Formula?.ToString() ?? "";
+                string current = "";
+                try { current = attrObj.GetType().GetProperty("Formula")?.GetValue(attrObj)?.ToString() ?? ""; } catch { }
+                
                 if (string.IsNullOrWhiteSpace(formula)) {
-                    if (targetAttr.Attribute.Formula != null) { targetAttr.Attribute.Formula = null; isModified = true; }
+                    var fProp = attrObj.GetType().GetProperty("Formula");
+                    if (fProp != null && fProp.GetValue(attrObj) != null) { fProp.SetValue(attrObj, null); isModified = true; }
                 } else if (formula != current) {
                     try {
-                        targetAttr.Attribute.Formula = Formula.Parse(formula, targetAttr.Attribute, null);
-                        targetAttr.IsKey = false; isModified = true;
+                        // Use static method if possible or reflection to find Parse
+                        var formulaType = typeof(Artech.Genexus.Common.Objects.Procedure).Assembly.GetType("Artech.Genexus.Common.Objects.Formula");
+                        if (formulaType != null) {
+                            var parseMethod = formulaType.GetMethod("Parse", new[] { typeof(string), typeof(Artech.Architecture.Common.Objects.KBObject), typeof(object) });
+                            if (parseMethod != null) {
+                                object parsed = parseMethod.Invoke(null, new object[] { formula, attrObj, null });
+                                attrObj.GetType().GetProperty("Formula")?.SetValue(attrObj, parsed);
+                                try { targetAttr.IsKey = false; } catch { }
+                                isModified = true;
+                            }
+                        }
                     } catch { }
                 }
             }
 
             if (nullable != null) {
                 int val = nullable.Equals("Yes", StringComparison.OrdinalIgnoreCase) ? 1 : (nullable.Equals("Managed", StringComparison.OrdinalIgnoreCase) ? 2 : 0);
-                if ((int)targetAttr.IsNullable != val) {
-                    targetAttr.IsNullable = (dynamic)val;
-                    try { targetAttr.Attribute.SetPropertyValue("Nullable", val); } catch { }
+                if (Convert.ToInt32(targetAttr.IsNullable) != val) {
+                    targetAttr.IsNullable = val;
+                    try { attrObj.SetPropertyValue("Nullable", val); } catch { }
                     isModified = true;
                 }
             }
@@ -110,16 +127,16 @@ namespace GxMcp.Worker.Services.Structure
                 if (match.Success) {
                     string tName = match.Groups[1].Value.ToUpper();
                     if (Enum.TryParse<Artech.Genexus.Common.eDBType>(tName, true, out var eType)) {
-                        if (targetAttr.Attribute.Type != eType) { targetAttr.Attribute.Type = eType; isModified = true; }
+                        if (attrObj.Type != eType) { attrObj.Type = eType; isModified = true; }
                         int len = match.Groups[2].Success ? int.Parse(match.Groups[2].Value) : 0;
-                        if (len > 0 && targetAttr.Attribute.Length != len) { targetAttr.Attribute.Length = len; isModified = true; }
+                        if (len > 0 && Convert.ToInt32(attrObj.Length) != len) { attrObj.Length = len; isModified = true; }
                         int dec = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
-                        if (dec > 0 && targetAttr.Attribute.Decimals != dec) { targetAttr.Attribute.Decimals = dec; isModified = true; }
+                        if (dec > 0 && Convert.ToInt32(attrObj.Decimals) != dec) { attrObj.Decimals = dec; isModified = true; }
                     }
                 }
             }
 
-            if (isModified) modifiedTracker.Add(targetAttr.Attribute);
+            if (isModified) modifiedTracker.Add(attrObj);
         }
     }
 }

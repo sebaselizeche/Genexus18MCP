@@ -117,3 +117,14 @@ The following refined scripts (located in `/scripts/sdk_reflection`) are state-o
     - **Features**: Extracts all public static fields or Enum values for a class. Permanent tool for discovering `PropertyId` values (e.g., from `ATT` or `TRNATTR`).
 5.  **`verify_sdk_behavior.ps1`**: Prototyping and logic verification environment.
     - **Usage**: Template for executing custom C#/SDK snippets in a pre-configured environment.
+
+## ⌨️ Shell & Automation: Anti-Mistake Protocol (v19.1)
+
+> [!IMPORTANT]
+> **CRITICAL RULE**: NEVER use the `cd` command within a `run_command` string. Always use the `Cwd` parameter. Failure to follow this is a violation of the protocol.
+
+1.  **NO EXPLICIT `cd`**: **Never** use the `cd` command within a `run_command` string.
+2.  **MANDATORY `Cwd`**: Always use the `Cwd` parameter of the tool to define the execution directory.
+3.  **Command Separators**: On Windows (PowerShell), always use `;` instead of `&&`.
+4.  **Junior Error Prevention**: Double-check basic commands (`dotnet`, `npm`, `powershell`). Avoid single-letter typos (e.g., `d` instead of `cd`).
+5.  **Terminal Freshness**: When a task involves multiple shell steps, prioritize fresh `run_command` calls to ensure a clean environment state.

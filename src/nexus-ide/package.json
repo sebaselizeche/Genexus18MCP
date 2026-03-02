@@ -11,10 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onFileSystem:gxkb18",
-    "onStartupFinished",
-    "onCommand:nexus-ide.openKb",
-    "onCommand:nexus-ide.addKbFolder"
+    "onFileSystem:gxkb18"
   ],
   "enabledApiProposals": [
     "fileSearchProvider",

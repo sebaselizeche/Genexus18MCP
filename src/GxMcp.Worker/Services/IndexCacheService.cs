@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Concurrent;
 using Artech.Architecture.Common.Objects;
+using GxMcp.Worker.Services.Structure;
 
 namespace GxMcp.Worker.Services
 {
@@ -16,8 +17,9 @@ namespace GxMcp.Worker.Services
         private readonly BuildService _buildService;
         private bool _initialized = false;
         private readonly object _lock = new object();
-        private bool _savingInProgress = false;
         private string _lastSavedJsonHash = null;
+        private DateTime _lastFlushTime = DateTime.MinValue;
+        private bool _savingInProgress = false;
 
         public IndexCacheService(BuildService buildService)
         {
@@ -136,8 +138,11 @@ namespace GxMcp.Worker.Services
                 BuildParentIndex(index);
                 _index = index;
             }
-            // Fire and forget save to disk
-            Task.Run(() => FlushToDisk());
+            // Fire and forget save to disk with throttling
+            if ((DateTime.Now - _lastFlushTime).TotalSeconds > 5)
+            {
+                Task.Run(() => FlushToDisk());
+            }
         }
 
         private void FlushToDisk()
@@ -163,7 +168,10 @@ namespace GxMcp.Worker.Services
                     Logger.Debug("Index flushed to disk (Background)");
                 }
                 catch (Exception ex) { Logger.Error("Flush Error: " + ex.Message); }
-                finally { _savingInProgress = false; }
+                finally { 
+                    _savingInProgress = false; 
+                    _lastFlushTime = DateTime.Now;
+                }
             }
         }
 
@@ -215,7 +223,7 @@ namespace GxMcp.Worker.Services
                     dynamic dStructure = ((dynamic)tbl).TableStructure;
                     if (dStructure != null && dStructure.Attributes != null) {
                         foreach (dynamic tableAttr in dStructure.Attributes) 
-                            children.Add(global::GxMcp.Worker.Services.Structure.VisualStructureMapper.MapAttribute(tableAttr));
+                            children.Add(VisualStructureMapper.MapAttribute(tableAttr));
                     }
                     entry.SourceSnippet = children.ToString(Newtonsoft.Json.Formatting.None);
                 } catch { }

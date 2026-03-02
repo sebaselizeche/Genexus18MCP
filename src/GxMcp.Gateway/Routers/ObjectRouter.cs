@@ -29,7 +29,8 @@ namespace GxMcp.Gateway.Routers
                             name = new { type = "string", description = "Object name." },
                             part = new { type = "string", description = "Part (Source, Rules, Events).", @default = "Source" },
                             offset = new { type = "integer", description = "Start line for pagination." },
-                            limit = new { type = "integer", description = "Lines to read." }
+                            limit = new { type = "integer", description = "Lines to read." },
+                            minimize = new { type = "boolean", description = "Minimize output for large files.", @default = false }
                         },
                         required = new[] { "name" }
                     }
@@ -80,6 +81,18 @@ namespace GxMcp.Gateway.Routers
                         properties = new { name = new { type = "string", description = "Attribute name." } },
                         required = new[] { "name" }
                     }
+                },
+                new {
+                    name = "genexus_get_properties",
+                    description = "Returns the properties of an object or control.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new { 
+                            name = new { type = "string", description = "Object name." },
+                            control = new { type = "string", description = "Optional control name." }
+                        },
+                        required = new[] { "name" }
+                    }
                 }
             };
         }
@@ -97,7 +110,8 @@ namespace GxMcp.Gateway.Routers
                         target = args?["name"]?.ToString(), 
                         part = args?["part"]?.ToString() ?? "Source",
                         offset = args?["offset"]?.ToObject<int?>(),
-                        limit = args?["limit"]?.ToObject<int?>()
+                        limit = args?["limit"]?.ToObject<int?>(),
+                        minimize = args?["minimize"]?.ToObject<bool>() ?? false
                     };
                 case "genexus_write_object":
                     return new { module = "Write", action = args?["part"]?.ToString() ?? "Source", target = args?["name"]?.ToString(), payload = args?["code"]?.ToString() };
@@ -116,6 +130,8 @@ namespace GxMcp.Gateway.Routers
                     return new { module = "Read", action = "GetVariables", target = args?["name"]?.ToString() };
                 case "genexus_get_attribute":
                     return new { module = "Read", action = "GetAttribute", target = args?["name"]?.ToString() };
+                case "genexus_get_properties":
+                    return new { module = "Property", action = "Get", target = args?["name"]?.ToString(), control = args?["control"]?.ToString() };
                 default:
                     return null;
             }

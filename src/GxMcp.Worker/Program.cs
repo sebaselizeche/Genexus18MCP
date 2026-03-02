@@ -186,9 +186,13 @@ namespace GxMcp.Worker
                 // 3. Initialize Connector and Factory
                 Logger.Debug("Loading Connector.dll...");
                 var connAsm = Assembly.LoadFrom(Path.Combine(gxPath, "Connector.dll"));
+                Logger.Debug("Connector.dll loaded.");
                 var connType = connAsm.GetType("Artech.Core.Connector");
+                Logger.Debug("Invoking Connector.Initialize...");
                 connType?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("Invoking Connector.Start...");
                 connType?.GetMethod("Start", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
+                Logger.Debug("Connector Started.");
                 
                 var kbBaseType = archAsm.GetType("Artech.Architecture.Common.Objects.KnowledgeBase");
                 var factoryProp = kbBaseType?.GetProperty("KBFactory", BindingFlags.Public | BindingFlags.Static);

@@ -115,6 +115,7 @@ namespace GxMcp.Worker.Services
                     ProcessIndexChunk(index, objects, 0);
                 } catch (Exception ex) {
                     _isIndexing = false;
+                    _currentStatus = "Error: " + ex.Message;
                     Logger.Error("BulkIndex Initialization Fatal: " + ex.Message);
                 }
             });

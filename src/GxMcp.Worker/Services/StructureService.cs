@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Artech.Genexus.Common.Objects;
 using GxMcp.Worker.Helpers;
@@ -91,6 +92,58 @@ namespace GxMcp.Worker.Services
         }
 
         public string GetVisualIndexes(string targetName) => _indexService.GetVisualIndexes(targetName);
+        
+        public string GetLogicStructure(string targetName)
+        {
+            try {
+                var obj = _objectService.FindObject(targetName);
+                if (obj == null) return "{\"error\": \"Object not found\"}";
+
+                var result = new JObject { ["name"] = obj.Name, ["type"] = obj.TypeDescriptor.Name };
+                var subs = new JArray();
+                var events = new JArray();
+
+                // 1. Get Source Part (Subs usually here)
+                try {
+                    var sourcePart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>();
+                    if (sourcePart != null) ExtractLogicItems(sourcePart.Source, subs, events);
+                } catch { }
+
+                // 2. Get Events Part (Events usually here)
+                try {
+                    var eventsPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.EventsPart>();
+                    if (eventsPart != null) ExtractLogicItems(eventsPart.Source, subs, events);
+                } catch { }
+
+                result["subs"] = subs;
+                result["events"] = events;
+                return result.ToString();
+            }
+            catch (Exception ex) { return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
+        }
+
+        private void ExtractLogicItems(string source, JArray subs, JArray events)
+        {
+            if (string.IsNullOrEmpty(source)) return;
+
+            // Sub Extraction
+            var subMatches = System.Text.RegularExpressions.Regex.Matches(source, @"(?i)\bsub\s+['""]?([\w\.]+)['""]?");
+            foreach (System.Text.RegularExpressions.Match match in subMatches)
+            {
+                string name = match.Groups[1].Value;
+                if (!subs.Any(s => s.ToString().Equals(name, StringComparison.OrdinalIgnoreCase)))
+                    subs.Add(name);
+            }
+
+            // Event Extraction
+            var eventMatches = System.Text.RegularExpressions.Regex.Matches(source, @"(?i)\bevent\s+['""]?([\w\.]+)['""]?");
+            foreach (System.Text.RegularExpressions.Match match in eventMatches)
+            {
+                string name = match.Groups[1].Value;
+                if (!events.Any(e => e.ToString().Equals(name, StringComparison.OrdinalIgnoreCase)))
+                    events.Add(name);
+            }
+        }
 
         private JArray SerializeTableStructure(Table tbl)
         {

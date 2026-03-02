@@ -388,7 +388,8 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       if (!result || result.error || result.status === "Error") {
         if (result?.issues && this._diagnosticProvider) {
           const editor = vscode.window.visibleTextEditors.find(
-            (e) => e.document.uri.toString() === uri.toString(),
+            (e: vscode.TextEditor) =>
+              e.document.uri.toString() === uri.toString(),
           );
           if (editor)
             this._diagnosticProvider.setDiagnostics(
@@ -402,8 +403,12 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       this._cache.commitWrite(uri, partName);
       this._shadowService?.syncToDisk(uri, content, partName);
       this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+
+      // Force directory refresh for structural changes
+      this.clearDirCache();
+
       vscode.window.setStatusBarMessage(`$(check) Saved ${target}`, 5000);
-    } catch (err) {
+    } catch (err: any) {
       vscode.window.showErrorMessage(`Save Error: ${err}`);
       throw err;
     }

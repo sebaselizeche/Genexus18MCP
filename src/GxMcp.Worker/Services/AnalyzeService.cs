@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using Artech.Architecture.Common.Objects;
+using Artech.Genexus.Common;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
 using GxMcp.Worker.Helpers;
@@ -15,11 +16,14 @@ namespace GxMcp.Worker.Services
         private readonly ObjectService _objectService;
         private readonly IndexCacheService _indexCacheService;
 
-        public AnalyzeService(KbService kbService, ObjectService objectService, IndexCacheService indexCacheService)
+        private readonly UIService _uiService;
+
+        public AnalyzeService(KbService kbService, ObjectService objectService, IndexCacheService indexCacheService, UIService uiService = null)
         {
             _kbService = kbService;
             _objectService = objectService;
             _indexCacheService = indexCacheService;
+            _uiService = uiService;
         }
 
         public string Analyze(string target)
@@ -41,7 +45,13 @@ namespace GxMcp.Worker.Services
                 foreach (var reference in obj.GetReferences())
                 {
                     var targetObj = kb.DesignModel.Objects.Get(reference.To);
-                    if (targetObj != null) calls.Add(targetObj.Name);
+                    if (targetObj != null) {
+                        var cObj = new JObject();
+                        cObj["name"] = targetObj.Name;
+                        cObj["type"] = targetObj.TypeDescriptor.Name;
+                        cObj["description"] = targetObj.Description;
+                        calls.Add(cObj);
+                    }
                 }
                 result["calls"] = calls;
 
@@ -68,6 +78,15 @@ namespace GxMcp.Worker.Services
 
                 if (!index.Objects.TryGetValue(targetName, out var targetNode))
                 {
+                    // FALLBACK: If not in index, try to find it in the KB directly
+                    var obj = _objectService.FindObject(targetName);
+                    if (obj != null) {
+                         // Temporary reconstruction of index entry to allow direct callers lookup if possible
+                         // Note: We won't have the full graph but at least we can return "0 affected" instead of "error"
+                         // or ideally, we trigger a re-index for this object if it's missing.
+                         return "{\"target\": \"" + obj.Name + "\", \"status\": \"Object exists but not yet indexed. Run genexus_bulk_index for full impact analysis.\", \"totalAffected\": 0}";
+                    }
+
                     // Try case-insensitive search if exact match fails
                     var key = index.Objects.Keys.FirstOrDefault(k => string.Equals(k, targetName, StringComparison.OrdinalIgnoreCase));
                     if (key == null || !index.Objects.TryGetValue(key, out targetNode))
@@ -174,24 +193,24 @@ namespace GxMcp.Worker.Services
                 foreach (var obj in kb.DesignModel.Objects.GetByName(null, null, name))
                 {
                     if (string.Equals(obj.TypeDescriptor.Name, "Attribute", StringComparison.OrdinalIgnoreCase))
-            {
-                dynamic attr = obj;
-                var json = new JObject();
-                json["name"] = attr.Name;
-                json["description"] = attr.Description;
-                json["type"] = attr.Type.ToString();
-                json["length"] = (int)attr.Length;
-                json["decimals"] = (int)attr.Decimals;
-                
-                try {
-                    if (attr.Table != null) {
-                        json["table"] = attr.Table.Name;
-                    }
-                } catch {}
+                    {
+                        dynamic attr = obj;
+                        var json = new JObject();
+                        json["name"] = attr.Name;
+                        json["description"] = attr.Description;
+                        json["type"] = attr.Type.ToString();
+                        json["length"] = (int)attr.Length;
+                        json["decimals"] = (int)attr.Decimals;
+                        
+                        try {
+                            if (attr.Table != null) {
+                                json["table"] = attr.Table.Name;
+                            }
+                        } catch {}
 
-                return json.ToString();
-            }
-        }
+                        return json.ToString();
+                    }
+                }
                 return "{\"error\":\"Attribute not found\"}";
             }
             catch (Exception ex)
@@ -207,11 +226,11 @@ namespace GxMcp.Worker.Services
                 var obj = _objectService.FindObject(name);
                 if (obj == null) return "{\"error\":\"Object not found\"}";
 
-                var variablesPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.VariablesPart>();
-                if (variablesPart == null) return "{\"error\":\"Variables part not found\"}";
+                dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
+                if (vPart == null) return "{\"error\":\"Variables part not found\"}";
 
                 var result = new JArray();
-                foreach (global::Artech.Genexus.Common.Variable var in variablesPart.Variables)
+                foreach (Variable var in vPart.Variables)
                 {
                     var item = new JObject();
                     item["name"] = var.Name;
@@ -243,7 +262,11 @@ namespace GxMcp.Worker.Services
                 foreach (var reference in obj.GetReferences())
                 {
                     var targetObj = kb.DesignModel.Objects.Get(reference.To);
-                    if (targetObj != null) calls.Add(new JObject { ["name"] = targetObj.Name, ["type"] = targetObj.TypeDescriptor.Name });
+                    if (targetObj != null) calls.Add(new JObject { 
+                        ["name"] = targetObj.Name, 
+                        ["type"] = targetObj.TypeDescriptor.Name,
+                        ["description"] = targetObj.Description
+                    });
                 }
                 result["calls"] = calls;
 
@@ -252,7 +275,11 @@ namespace GxMcp.Worker.Services
                 foreach (var reference in obj.GetReferencesTo())
                 {
                     var sourceObj = kb.DesignModel.Objects.Get(reference.From);
-                    if (sourceObj != null) calledBy.Add(new JObject { ["name"] = sourceObj.Name, ["type"] = sourceObj.TypeDescriptor.Name });
+                    if (sourceObj != null) calledBy.Add(new JObject { 
+                        ["name"] = sourceObj.Name, 
+                        ["type"] = sourceObj.TypeDescriptor.Name,
+                        ["description"] = sourceObj.Description
+                    });
                 }
                 result["calledBy"] = calledBy;
 
@@ -264,7 +291,7 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        public string GetParameters(string name)
+        public string GetConversionContext(string name)
         {
             try
             {
@@ -274,57 +301,61 @@ namespace GxMcp.Worker.Services
                 var result = new JObject();
                 result["name"] = obj.Name;
                 result["type"] = obj.TypeDescriptor.Name;
+                result["description"] = obj.Description;
 
-                var rulesPart = obj.Parts.Get<RulesPart>();
-                if (rulesPart != null)
-                {
-                    dynamic parmRule = null;
-                    foreach (dynamic rule in ((dynamic)rulesPart).Rules)
-                    {
-                        if (rule.GetType().Name.Contains("ParmRule"))
-                        {
-                            parmRule = rule;
-                            break;
+                // 1. Get Parameters
+                var parameters = new JArray();
+                try {
+                    var (parmRule, parms) = _objectService.GetParametersInternal(obj);
+                    if (!string.IsNullOrEmpty(parmRule)) result["parmRule"] = parmRule;
+                    foreach (var p in parms) {
+                        var pObj = new JObject();
+                        pObj["name"] = p.Name;
+                        pObj["accessor"] = p.Accessor;
+                        pObj["type"] = p.Type;
+                        parameters.Add(pObj);
+                    }
+                } catch {}
+                result["parameters"] = parameters;
+
+                // 2. Get Variables
+                var variables = new JArray();
+                try {
+                    dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
+                    if (vPart != null) {
+                        foreach (Variable v in vPart.Variables) {
+                            var vObj = new JObject();
+                            vObj["name"] = v.Name;
+                            vObj["type"] = v.Type.ToString();
+                            vObj["length"] = (int)v.Length;
+                            vObj["decimals"] = (int)v.Decimals;
+                            variables.Add(vObj);
                         }
                     }
+                } catch {}
+                result["variables"] = variables;
 
-                    if (parmRule != null)
-                    {
-                        var parameters = new JArray();
-                        var parmColl = ((dynamic)parmRule).Parameters;
-                        
-                        // Also build a signature string like "ProcName(&Var1, &Var2)"
-                        var paramNames = new List<string>();
-
-                        foreach (dynamic p in parmColl)
-                        {
-                            var paramItem = new JObject();
-                            string accessor = p.Accessor.ToString();
-                            paramItem["accessor"] = accessor;
-                            paramItem["name"] = accessor.TrimStart('&');
-                            
-                            // Direction mapping: In:0, Out:1, InOut:2 (or similar depending on SDK)
-                            paramItem["direction"] = p.Type.ToString(); 
-
-                            // Try to find variable type
-                            var varPart = obj.Parts.Get<VariablesPart>();
-                            if (varPart != null)
-                            {
-                                var variable = varPart.Variables.FirstOrDefault(v => string.Equals(v.Name, paramItem["name"].ToString(), StringComparison.OrdinalIgnoreCase));
-                                if (variable != null)
-                                {
-                                    paramItem["typeName"] = variable.Type.ToString();
-                                    paramItem["length"] = variable.Length;
-                                }
-                            }
-                            
-                            parameters.Add(paramItem);
-                            paramNames.Add(accessor);
-                        }
-                        result["parameters"] = parameters;
-                        result["signature"] = $"{obj.Name}({string.Join(", ", paramNames)})";
+                // 3. Get Rules/Conditions/Events specifically
+                try {
+                    result["rules"] = GetPartSourceByName(obj, "Rules");
+                    if (obj is Procedure || obj is WebPanel) {
+                        result["conditions"] = GetPartSourceByName(obj, "Conditions");
                     }
+                    if (obj is Transaction || obj is WebPanel) {
+                        result["events"] = GetPartSourceByName(obj, "Events");
+                    }
+                } catch {}
+
+                // 4. Get UI Structure
+                if (_uiService != null) {
+                    try {
+                        result["uiStructure"] = _uiService.GetSimplifiedUIStructure(obj);
+                    } catch {}
                 }
+
+                // 5. Get WWP Metadata
+                result["wwpMetadata"] = GetWWPMetadata(obj);
+
                 return result.ToString();
             }
             catch (Exception ex)
@@ -333,56 +364,74 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        public string ExplainCode(string target, string payload)
+        private JObject GetWWPMetadata(KBObject obj)
+        {
+            var wwp = new JObject();
+            try {
+                dynamic dObj = obj;
+                if (dObj.Properties != null) {
+                    foreach (dynamic prop in dObj.Properties) {
+                        string name = prop.Name;
+                        if (name == "Pattern") wwp["pattern"] = prop.Value?.ToString();
+                        else if (name == "MasterPage") wwp["masterPage"] = prop.Value?.ToString();
+                    }
+                }
+
+                bool isWWP = false;
+                if (obj.Description.Contains("WorkWithPlus") || obj.Description.Contains("WWP")) isWWP = true;
+                wwp["isWorkWithPlusAware"] = isWWP;
+            } catch {}
+            return wwp;
+        }
+
+        private string GetPartSourceByName(KBObject obj, string name)
+        {
+            try {
+                var part = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.TypeDescriptor.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (part is ISource source) return source.Source;
+            } catch {}
+            return null;
+        }
+
+        public string GetSignature(string name)
         {
             try
             {
-                var data = JObject.Parse(payload);
-                string error = data["error"]?.ToString();
-                string code = data["code"]?.ToString();
-                int line = data["line"] != null ? (int)data["line"] : -1;
+                var obj = _objectService.FindObject(name);
+                if (obj == null) return "{\"error\":\"Object not found\"}";
 
-                GxMcp.Worker.Helpers.Logger.Info($"AI Analyzing code for {target} with error: {error}");
-
-                // Heuristic-based AI Fix (Simulated)
-                string fix = code;
-                string summary = "No fix found.";
-
-                // Example 1: Missing semicolon
-                if (error.Contains("syntax error") && !code.Contains(";"))
-                {
-                    fix = code.Replace("\n", ";\n");
-                    summary = "Added missing semicolons.";
-                }
-                // Example 2: Invalid Variable syntax (forgot &)
-                else if (error.Contains("Undefined") && code.Contains(" var "))
-                {
-                    fix = code.Replace(" var ", " &var ");
-                    summary = "Fixed variable prefix (missing &).";
-                }
-                // Example 3: Commits in loops (anti-pattern)
-                else if (code.Contains("for each") && code.Contains("commit"))
-                {
-                    fix = code.Replace("commit", "// commit moved out of loop");
-                    summary = "Moved commit out of 'for each' loop for better performance.";
-                }
-
+                var (parmRule, parms) = _objectService.GetParametersInternal(obj);
                 var result = new JObject();
-                result["status"] = "Success";
-                result["summary"] = summary;
-                result["fix"] = fix;
-
+                result["name"] = obj.Name;
+                result["type"] = obj.TypeDescriptor.Name;
+                result["parmRule"] = parmRule;
+                
+                var parmArray = new JArray();
+                foreach (var p in parms) {
+                    parmArray.Add(new JObject { ["name"] = p.Name, ["accessor"] = p.Accessor, ["type"] = p.Type });
+                }
+                result["parameters"] = parmArray;
+                
                 return result.ToString();
             }
             catch (Exception ex)
             {
-                return "{\"error\":\"AI analysis failed: " + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
-        public string ListSections(string target, string partName)
+        public string ExplainCode(string target, string codeSnippet)
         {
-            return "{\"status\": \"ListSections not implemented yet\"}";
+            try
+            {
+                // This is a placeholder for AI-powered explanation.
+                // In a real scenario, this would call LLM.
+                return "{\"explanation\":\"Code analysis simulation\",\"originalCode\":\"" + CommandDispatcher.EscapeJsonString(codeSnippet ?? "") + "\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
         }
     }
 }
