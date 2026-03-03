@@ -405,11 +405,13 @@ namespace GxMcp.Worker.Services
                 result["totalLines"] = lines.Length;
 
                 AddVariableMetadata(obj, paginatedContent, result);
+                AddCallSignatures(obj, paginatedContent, result);
             }
             else
             {
                 ProcessTextResponse(content, result, client);
                 AddVariableMetadata(obj, content, result);
+                AddCallSignatures(obj, content, result);
             }
         }
 
@@ -427,6 +429,48 @@ namespace GxMcp.Worker.Services
                 result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
                 result["isBase64"] = true;
             }
+        }
+
+        private void AddCallSignatures(KBObject obj, string source, JObject result)
+        {
+            try
+            {
+                var calledObjectNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // Regex for common call patterns in GeneXus
+                var callMatches = System.Text.RegularExpressions.Regex.Matches(source, 
+                    @"\b(?:call|udp|submit)\s*\(\s*(\w+)|\b(\w+)\s*\.\s*(?:call|udp|submit)\b", 
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                foreach (System.Text.RegularExpressions.Match match in callMatches)
+                {
+                    string name = !string.IsNullOrEmpty(match.Groups[1].Value) ? match.Groups[1].Value : match.Groups[2].Value;
+                    calledObjectNames.Add(name);
+                }
+
+                if (calledObjectNames.Count > 0)
+                {
+                    var calls = new JArray();
+                    foreach (var name in calledObjectNames)
+                    {
+                        var target = FindObject(name);
+                        if (target != null && target.Guid != obj.Guid)
+                        {
+                            var (parmRule, parms) = GetParametersInternal(target);
+                            if (!string.IsNullOrEmpty(parmRule))
+                            {
+                                var cObj = new JObject();
+                                cObj["name"] = target.Name;
+                                cObj["type"] = target.TypeDescriptor.Name;
+                                cObj["parmRule"] = parmRule;
+                                calls.Add(cObj);
+                            }
+                        }
+                    }
+                    if (calls.Count > 0) result["calls"] = calls;
+                }
+            }
+            catch (Exception ex) { Logger.Debug("AddCallSignatures failed: " + ex.Message); }
         }
 
         private void AddVariableMetadata(KBObject obj, string source, JObject result)

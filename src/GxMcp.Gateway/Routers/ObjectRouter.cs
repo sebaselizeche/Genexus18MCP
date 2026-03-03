@@ -36,9 +36,24 @@ namespace GxMcp.Gateway.Routers
                             mode = new { type = "string", @enum = new[] { "full", "patch" }, description = "Edit mode." },
                             content = new { type = "string", description = "New code or patch content." },
                             context = new { type = "string", description = "For patch mode: The exact text (old_string) to replace." },
-                            operation = new { type = "string", @enum = new[] { "Replace", "Insert_After", "Append" }, description = "For patch mode: Operation to perform." }
+                            operation = new { type = "string", @enum = new[] { "Replace", "Insert_After", "Append" }, description = "For patch mode: Operation to perform." },
+                            changes = new {
+                                type = "array",
+                                items = new {
+                                    type = "object",
+                                    properties = new {
+                                        part = new { type = "string" },
+                                        mode = new { type = "string", @enum = new[] { "full", "patch" } },
+                                        content = new { type = "string" },
+                                        context = new { type = "string" },
+                                        operation = new { type = "string", @enum = new[] { "Replace", "Insert_After", "Append" } }
+                                    },
+                                    required = new[] { "content" }
+                                },
+                                description = "Batch of changes to apply to this object."
+                            }
                         },
-                        required = new[] { "name", "mode", "content" }
+                        required = new[] { "name" }
                     }
                 }
             };
@@ -62,6 +77,16 @@ namespace GxMcp.Gateway.Routers
                     };
 
                 case "genexus_edit":
+                    if (args?["changes"] != null)
+                    {
+                        return new { 
+                            module = "Batch", 
+                            action = "BatchEdit", 
+                            target = target,
+                            changes = args["changes"]
+                        };
+                    }
+
                     string mode = args?["mode"]?.ToString();
                     if (mode == "patch")
                     {

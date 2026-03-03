@@ -356,12 +356,41 @@ namespace GxMcp.Worker.Services
                 // 5. Get WWP Metadata
                 result["wwpMetadata"] = GetWWPMetadata(obj);
 
+                // 6. Generate Semantic Summary
+                result["summary"] = GenerateSummary(obj, result);
+
                 return result.ToString();
             }
             catch (Exception ex)
             {
                 return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private string GenerateSummary(KBObject obj, JObject fullResult)
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"{obj.TypeDescriptor.Name} {obj.Name}: {obj.Description}. ");
+                
+                var parms = fullResult["parameters"] as JArray;
+                if (parms != null && parms.Count > 0)
+                    sb.Append($"Accepts {parms.Count} parameters. ");
+                
+                var vars = fullResult["variables"] as JArray;
+                if (vars != null && vars.Count > 0)
+                    sb.Append($"Uses {vars.Count} local variables. ");
+
+                if (fullResult["uiStructure"] != null && fullResult["uiStructure"].Type != JTokenType.Null)
+                    sb.Append("Has a user interface. ");
+
+                if (fullResult["wwpMetadata"] != null && fullResult["wwpMetadata"].Type != JTokenType.Null)
+                    sb.Append("Uses WorkWithPlus patterns. ");
+
+                return sb.ToString().Trim();
+            }
+            catch { return $"{obj.TypeDescriptor.Name} {obj.Name}"; }
         }
 
         private JObject GetWWPMetadata(KBObject obj)

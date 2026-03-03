@@ -63,14 +63,14 @@ namespace GxMcp.Worker.Services
             _analyzeService = new AnalyzeService(_kbService, _objectService, _indexCacheService, _uiService);
             _writeService = new WriteService(_objectService);
             _refactorService = new RefactorService(_kbService, _objectService, _indexCacheService);
-            _batchService = new BatchService(_kbService, _writeService);
+            _patchService = new PatchService(_objectService, _writeService);
+            _batchService = new BatchService(_kbService, _writeService, _patchService);
             _forgeService = new ForgeService(_kbService);
             _testService = new TestService(_kbService, _buildService);
             _wikiService = new WikiService(_objectService, _searchService);
             _historyService = new HistoryService(_objectService, _writeService);
             _linterService = new LinterService(_objectService, _navigationService);
             _patternService = new PatternService(_indexCacheService, _objectService);
-            _patchService = new PatchService(_objectService, _writeService);
             _sdtService = new SDTService(_objectService);
             _structureService = new StructureService(_objectService);
             _propertyService = new PropertyService(_objectService);
@@ -141,6 +141,10 @@ namespace GxMcp.Worker.Services
                         if (action == "BulkIndex") return _kbService.BulkIndex();
                         if (action == "SelfTest") return _selfTestService.RunAllTests();
                         if (action == "GetIndexStatus") return _kbService.GetIndexStatus();
+                        break;
+                    case "batch":
+                        if (action == "BatchEdit") return _batchService.BatchEdit(target, args?["changes"] as JArray);
+                        if (action == "Process") return _batchService.ProcessBatch(args?["batchAction"]?.ToString(), target, payload);
                         break;
                     case "search":
                         if (action == "Query") return _searchService.Search(target, null, null, args?["limit"]?.ToObject<int?>() ?? 50);

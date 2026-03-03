@@ -253,7 +253,7 @@ namespace GxMcp.Gateway
                     {
                         string resultJson = await tcs.Task;
                         var resultObj = JObject.Parse(resultJson);
-                        var finalResult = resultObj["result"] ?? resultObj["error"];
+                        var finalResult = TruncateResponseIfNeeded(resultObj["result"] ?? resultObj["error"], toolName);
                         
                         var response = new JObject { 
                             ["jsonrpc"] = "2.0", 
@@ -323,6 +323,41 @@ namespace GxMcp.Gateway
             }
             
             return null;
+        }
+
+        private static JToken TruncateResponseIfNeeded(JToken? result, string toolName)
+        {
+            if (result == null) return JValue.CreateNull();
+            
+            string raw = result.ToString(Formatting.None);
+            if (raw.Length < 60000) return result;
+
+            Log($"[Budget] Truncating response for {toolName} ({raw.Length} chars)");
+
+            if (result is JObject obj)
+            {
+                // Intelligent Truncation: Preserve metadata, prune large content
+                if (obj["source"] != null && obj["source"].Type == JTokenType.String)
+                {
+                    string source = obj["source"].ToString();
+                    if (source.Length > 30000)
+                    {
+                        obj["source"] = source.Substring(0, 25000) + 
+                                       "\n\n[... TRUNCATED BY GATEWAY TOKEN BUDGET ...] \n\n" + 
+                                       source.Substring(source.Length - 5000);
+                        obj["isTruncated"] = true;
+                    }
+                }
+                
+                string truncatedRaw = obj.ToString(Formatting.None);
+                if (truncatedRaw.Length > 80000)
+                {
+                    return new JValue(truncatedRaw.Substring(0, 75000) + "... [HARD TRUNCATED]");
+                }
+                return obj;
+            }
+
+            return new JValue(raw.Substring(0, 75000) + "... [TRUNCATED]");
         }
 
         static Task StartHttpServer(Configuration config)

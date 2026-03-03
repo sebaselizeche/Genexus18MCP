@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
 {
@@ -7,12 +8,61 @@ namespace GxMcp.Worker.Services
     {
         private readonly KbService _kbService;
         private readonly WriteService _writeService;
+        private readonly PatchService _patchService;
         private readonly List<BatchItem> _buffer = new List<BatchItem>();
 
-        public BatchService(KbService kbService, WriteService writeService)
+        public BatchService(KbService kbService, WriteService writeService, PatchService patchService)
         {
             _kbService = kbService;
             _writeService = writeService;
+            _patchService = patchService;
+        }
+
+        public string BatchEdit(string target, JArray changes)
+        {
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                int count = 0;
+                var results = new JArray();
+
+                foreach (var change in changes)
+                {
+                    string part = change["part"]?.ToString() ?? "Source";
+                    string mode = change["mode"]?.ToString() ?? "patch";
+                    string content = change["content"]?.ToString();
+                    string context = change["context"]?.ToString();
+                    string operation = change["operation"]?.ToString() ?? "Replace";
+
+                    string result;
+                    if (mode == "patch")
+                    {
+                        result = _patchService.ApplyPatch(target, part, operation, content, context);
+                    }
+                    else
+                    {
+                        result = _writeService.WriteObject(target, part, content);
+                    }
+                    
+                    try {
+                        results.Add(JObject.Parse(result));
+                    } catch {
+                        results.Add(new JObject { ["error"] = result });
+                    }
+                    count++;
+                }
+
+                return new JObject { 
+                    ["status"] = "Success", 
+                    ["count"] = count, 
+                    ["results"] = results,
+                    ["duration"] = sw.ElapsedMilliseconds 
+                }.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"BatchEdit failed: " + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+            }
         }
 
         public string ProcessBatch(string action, string name, string code)
