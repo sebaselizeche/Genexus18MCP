@@ -10,44 +10,28 @@ namespace GxMcp.Worker.Helpers
 {
     public static class SdkDiagnosticsHelper
     {
-        private static PropertyInfo _messagesPropCache;
-
         public static JArray GetDiagnostics(KBObject obj)
         {
             var issues = new JArray();
             try
             {
+                // 1. Structural Validation (Standard SDK)
                 var output = new OutputMessages();
                 obj.Validate(output);
 
                 foreach (var msg in output.OnlyMessages)
                 {
-                    if (msg is OutputError error)
-                    {
-                        issues.Add(CreateIssueFromOutputError(obj, error));
-                    }
+                    issues.Add(CreateIssueFromSdkMessage(obj, msg));
                 }
 
-                // Also check the "Messages" property which some objects use for in-memory errors
-                if (_messagesPropCache == null)
-                    _messagesPropCache = obj.GetType().GetProperty("Messages", BindingFlags.Public | BindingFlags.Instance);
-
-                if (_messagesPropCache != null)
+                // 2. Scan Parts for "Messages" property (Where parser/compiler errors live)
+                foreach (var part in obj.Parts)
                 {
-                    var messages = _messagesPropCache.GetValue(obj) as System.Collections.IEnumerable;
-                    if (messages != null)
-                    {
-                        foreach (var msg in messages)
-                        {
-                            // Avoid duplicates from Validate if possible, but Messages often has more runtime info
-                            string msgStr = msg.ToString();
-                            if (!issues.Any(i => i["description"]?.ToString() == msgStr))
-                            {
-                                issues.Add(CreateIssueFromMessage(obj, msgStr));
-                            }
-                        }
-                    }
+                    CollectDetailedMessages(part, issues, obj, part.TypeDescriptor?.Name);
                 }
+
+                // 3. Scan the Object itself
+                CollectDetailedMessages(obj, issues, obj, "Object");
             }
             catch (Exception ex)
             {
@@ -56,57 +40,82 @@ namespace GxMcp.Worker.Helpers
             return issues;
         }
 
-        private static JObject CreateIssueFromOutputError(KBObject obj, OutputError error)
+        private static void CollectDetailedMessages(object target, JArray issues, KBObject contextObj, string partName)
         {
+            try
+            {
+                var prop = target.GetType().GetProperty("Messages", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                if (prop != null)
+                {
+                    var value = prop.GetValue(target);
+                    if (value is System.Collections.IEnumerable list)
+                    {
+                        foreach (object msg in list)
+                        {
+                            if (msg == null) continue;
+                            issues.Add(CreateIssueFromSdkMessage(contextObj, msg, partName));
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static JObject CreateIssueFromSdkMessage(KBObject obj, object msg, string partName = null)
+        {
+            string msgText = msg.ToString();
+            string msgCode = "SDK";
+            string severity = "Error";
             int line = 1;
             int column = 1;
-            string part = GetObjectDefaultPart(obj);
 
-            if (error.Position is Artech.Common.Location.TextPosition textPos)
-            {
-                line = textPos.Line;
-                column = textPos.Char;
+            try {
+                // Use reflection/dynamic to get properties from various SDK message types (OutputError, Message, etc.)
+                dynamic dMsg = msg;
+                try { msgText = dMsg.Text ?? dMsg.Description ?? msgText; } catch {}
+                try { msgCode = dMsg.ErrorCode ?? dMsg.Id ?? dMsg.Code ?? msgCode; } catch {}
+                
+                try {
+                    var position = dMsg.Position;
+                    if (position != null && position.GetType().Name.Contains("TextPosition")) {
+                        line = (int)position.Line;
+                        column = (int)position.Char;
+                    }
+                } catch {}
+
+                try {
+                    string lvl = dMsg.Level.ToString() ?? dMsg.Type.ToString() ?? "";
+                    if (lvl.Contains("Warn")) severity = "Warning";
+                    else if (lvl.Contains("Info")) severity = "Information";
+                } catch {}
+            } catch { }
+
+            // Heuristic for line numbers in plain text messages
+            if (line == 1) {
+                var match = System.Text.RegularExpressions.Regex.Match(msgText, @"line\s+(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success) int.TryParse(match.Groups[1].Value, out line);
             }
 
-            string severity = "Information";
-            if (error.Level == MessageLevel.Error) severity = "Error";
-            else if (error.Level == MessageLevel.Warning) severity = "Warning";
-
             var issue = new JObject();
-            issue["code"] = error.ErrorCode;
-            issue["title"] = "SDK Validation";
+            issue["code"] = msgCode;
+            issue["title"] = "GeneXus Error/Message";
             issue["severity"] = severity;
-            issue["description"] = error.Text;
+            issue["description"] = msgText;
             issue["line"] = line;
             issue["column"] = column;
-            issue["snippet"] = "";
-            issue["part"] = part;
+            issue["part"] = partName ?? GetObjectDefaultPart(obj);
+            issue["suggestion"] = InferSuggestion(msgText);
             return issue;
         }
 
-        private static JObject CreateIssueFromMessage(KBObject obj, string message)
+        private static string InferSuggestion(string message)
         {
-            // Try to parse line number from string if it follows common pattern: "Error in line X: ..."
-            int line = 1;
-            int column = 1;
-            string description = message;
-
-            var match = System.Text.RegularExpressions.Regex.Match(message, @"line\s+(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (match.Success)
-            {
-                int.TryParse(match.Groups[1].Value, out line);
-            }
-
-            var issue = new JObject();
-            issue["code"] = "SDK";
-            issue["title"] = "SDK Error";
-            issue["severity"] = "Error";
-            issue["description"] = description;
-            issue["line"] = line;
-            issue["column"] = column;
-            issue["snippet"] = "";
-            issue["part"] = GetObjectDefaultPart(obj);
-            return issue;
+            string m = message.ToLower();
+            if (m.Contains("not defined") || m.Contains("não definida")) return "Check if the variable or attribute is properly declared in the Variables part or exists in the Transaction structure.";
+            if (m.Contains("expected") || m.Contains("esperado")) return "Check for missing syntax elements like ENDIF, ENDFOR, or semicolons.";
+            if (m.Contains("type mismatch") || m.Contains("incompatíveis")) return "The data types of the expressions don't match. Check if you're comparing a String with a Numeric.";
+            if (m.Contains("invalid command")) return "The command is not valid in this part of the object (e.g., UI commands inside a Procedure without output).";
+            return "Review the syntax and ensure all referenced objects exist in the KB.";
         }
 
         public static string GetObjectDefaultPart(KBObject obj)

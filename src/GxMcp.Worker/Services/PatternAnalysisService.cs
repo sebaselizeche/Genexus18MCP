@@ -80,7 +80,7 @@ namespace GxMcp.Worker.Services
                 if (string.IsNullOrEmpty(xml)) return "{\"error\": \"Could not extract XML from PatternInstance. Object type: " + instanceObj.GetType().Name + "\"}";
 
                 var result = ParseWWPXml(xml);
-                result["rawSnippet"] = xml.Length > 1000 ? xml.Substring(0, 1000) : xml;
+                result["rawSnippet"] = xml.Length > 5000 ? xml.Substring(0, 5000) : xml;
                 return result.ToString();
             }
             catch (Exception ex)
@@ -110,7 +110,6 @@ namespace GxMcp.Worker.Services
             var result = new JObject();
             try
             {
-                // GeneXus serialization often wraps the real Pattern XML in <Data><![CDATA[...]]>
                 string realXml = xml;
                 if (xml.Contains("<![CDATA["))
                 {
@@ -125,9 +124,45 @@ namespace GxMcp.Worker.Services
                 XDocument doc = XDocument.Parse(realXml);
                 var root = doc.Root;
                 
-                // WWP (DVelop) uses specific tags like <instance>, <level>, <tab>, <grid>
-                result["template"] = root?.Attribute("template")?.Value ?? root?.Element("Template")?.Value;
+                result["template"] = root?.Attribute("template")?.Value ?? root?.Attribute("Template")?.Value;
                 
+                var attributes = new JArray();
+                foreach (var att in doc.Descendants().Where(e => e.Name.LocalName.Equals("attribute", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var aObj = new JObject();
+                    string rawAtt = att.Attribute("attribute")?.Value ?? "";
+                    // WWP format is often GUID-AttributeName
+                    string name = rawAtt.Contains("-") ? rawAtt.Substring(rawAtt.LastIndexOf("-") + 1) : rawAtt;
+                    
+                    aObj["name"] = name;
+                    aObj["description"] = att.Attribute("description")?.Value;
+                    aObj["visible"] = att.Attribute("visible")?.Value;
+                    aObj["readOnly"] = att.Attribute("readOnly")?.Value;
+                    attributes.Add(aObj);
+                }
+                result["attributes"] = attributes;
+
+                var variables = new JArray();
+                foreach (var varNode in doc.Descendants().Where(e => e.Name.LocalName.Equals("variable", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var vObj = new JObject();
+                    vObj["name"] = varNode.Attribute("name")?.Value ?? varNode.Attribute("Name")?.Value;
+                    vObj["description"] = varNode.Attribute("description")?.Value;
+                    vObj["readOnly"] = varNode.Attribute("readOnly")?.Value;
+                    variables.Add(vObj);
+                }
+                result["variables"] = variables;
+
+                var actions = new JArray();
+                foreach (var act in doc.Descendants().Where(e => e.Name.LocalName.Contains("Action")))
+                {
+                    var actObj = new JObject();
+                    actObj["name"] = act.Attribute("name")?.Value ?? act.Attribute("Name")?.Value;
+                    actObj["caption"] = act.Attribute("caption")?.Value ?? act.Attribute("Caption")?.Value;
+                    actions.Add(actObj);
+                }
+                result["actions"] = actions;
+
                 var tabs = new JArray();
                 foreach (var tab in doc.Descendants().Where(e => e.Name.LocalName.Equals("tab", StringComparison.OrdinalIgnoreCase)))
                 {
@@ -143,14 +178,6 @@ namespace GxMcp.Worker.Services
                 {
                     var gObj = new JObject();
                     gObj["name"] = grid.Attribute("name")?.Value ?? grid.Attribute("Name")?.Value;
-                    
-                    // In WWP, attributes are often children of the grid
-                    var attributes = new JArray();
-                    foreach (var att in grid.Descendants().Where(e => e.Name.LocalName.Equals("attribute", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        attributes.Add(att.Attribute("Name")?.Value ?? att.Attribute("name")?.Value);
-                    }
-                    gObj["attributes"] = attributes;
                     grids.Add(gObj);
                 }
                 result["grids"] = grids;

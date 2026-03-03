@@ -257,6 +257,13 @@ namespace GxMcp.Worker.Services
 
         private string ReadObjectSourceInternal(KBObject obj, string partName, int? offset = null, int? limit = null, string client = "ide", bool minimize = false)
         {
+            if (string.IsNullOrEmpty(partName))
+            {
+                if (obj is Procedure) partName = "Source";
+                else if (obj is Transaction || obj is WebPanel) partName = "Events";
+                else partName = "Source";
+            }
+
             Logger.Info($"ReadObjectSourceInternal: {obj.Name} (Part: {partName}, Client: {client})");
             var sw = Stopwatch.StartNew();
             try
@@ -426,41 +433,59 @@ namespace GxMcp.Worker.Services
         {
             try
             {
+                // Nirvana v19.4: Auto-Inject Full Context (Variables + Data Schema + Pattern)
                 var varPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
-                if (varPart == null) return;
-
-                var referencedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var matches = System.Text.RegularExpressions.Regex.Matches(source, @"&(\w+)");
-                foreach (System.Text.RegularExpressions.Match match in matches) {
-                    referencedVars.Add(match.Groups[1].Value);
-                }
-
-                if (referencedVars.Count == 0) return;
-
-                var variables = new JArray();
-                var varListProp = varPart.GetType().GetProperty("Variables");
-                if (varListProp != null)
+                if (varPart != null)
                 {
-                    var varList = varListProp.GetValue(varPart) as System.Collections.IEnumerable;
-                    if (varList != null)
+                    var referencedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var matches = System.Text.RegularExpressions.Regex.Matches(source, @"&(\w+)");
+                    foreach (System.Text.RegularExpressions.Match match in matches) {
+                        referencedVars.Add(match.Groups[1].Value);
+                    }
+
+                    if (referencedVars.Count > 0)
                     {
-                        foreach (object vObj in varList)
+                        var variables = new JArray();
+                        var varListProp = varPart.GetType().GetProperty("Variables");
+                        if (varListProp != null)
                         {
-                            dynamic v = vObj;
-                            string vName = v.Name;
-                            if (referencedVars.Contains(vName))
+                            var varList = varListProp.GetValue(varPart) as System.Collections.IEnumerable;
+                            if (varList != null)
                             {
-                                variables.Add(new JObject {
-                                    ["name"] = vName,
-                                    ["type"] = v.Type.ToString(),
-                                    ["length"] = Convert.ToInt32(v.Length),
-                                    ["decimals"] = Convert.ToInt32(v.Decimals)
-                                });
+                                foreach (object vObj in varList)
+                                {
+                                    dynamic v = vObj;
+                                    string vName = v.Name;
+                                    if (referencedVars.Contains(vName))
+                                    {
+                                        variables.Add(new JObject {
+                                            ["name"] = vName,
+                                            ["type"] = v.Type.ToString(),
+                                            ["length"] = Convert.ToInt32(v.Length),
+                                            ["decimals"] = Convert.ToInt32(v.Decimals),
+                                            ["isCollection"] = (bool)v.IsCollection
+                                        });
+                                    }
+                                }
                             }
                         }
+                        if (variables.Count > 0) result["variables"] = variables;
                     }
                 }
-                if (variables.Count > 0) result["variables"] = variables;
+
+                // Inject Data Context (Tables used in this object)
+                if (_dataInsightService != null)
+                {
+                    try {
+                        var dataContextJson = _dataInsightService.GetDataContext(obj.Name);
+                        if (!string.IsNullOrEmpty(dataContextJson) && !dataContextJson.Contains("\"error\""))
+                        {
+                            var dataContext = JObject.Parse(dataContextJson);
+                            if (dataContext["dataSchema"] != null) result["dataSchema"] = dataContext["dataSchema"];
+                            if (dataContext["patternMetadata"] != null) result["patternMetadata"] = dataContext["patternMetadata"];
+                        }
+                    } catch { /* Silent fail to ensure read stability */ }
+                }
             }
             catch { }
         }

@@ -13,6 +13,7 @@ namespace GxMcp.Worker.Services
     public class WriteService
     {
         private readonly ObjectService _objectService;
+        private ValidationService _validationService;
         private static readonly object _flushLock = new object();
         private static System.Timers.Timer _flushTimer;
         private static bool _pendingCommit = false;
@@ -22,6 +23,8 @@ namespace GxMcp.Worker.Services
             _objectService = objectService;
             InitializeFlushTimer();
         }
+
+        public void SetValidationService(ValidationService vs) { _validationService = vs; }
 
         private void InitializeFlushTimer()
         {
@@ -81,7 +84,7 @@ namespace GxMcp.Worker.Services
             _flushTimer.Start();
         }
 
-        public string WriteObject(string target, string partName, string code)
+        public string WriteObject(string target, string partName, string code, bool autoValidate = true)
         {
             try
             {
@@ -93,6 +96,18 @@ namespace GxMcp.Worker.Services
                         decodedCode = System.Text.Encoding.UTF8.GetString(data);
                         Logger.Info("[DEBUG-SAVE] Payload decoded from Base64.");
                     } catch { /* Not base64, use as is */ }
+                }
+
+                // Nirvana v19.4: Auto-Healing (Pre-save validation)
+                if (autoValidate && _validationService != null && !partName.Equals("Variables", StringComparison.OrdinalIgnoreCase) && !partName.Equals("Structure", StringComparison.OrdinalIgnoreCase))
+                {
+                    string validationRes = _validationService.ValidateCode(target, partName, decodedCode);
+                    var valJson = JObject.Parse(validationRes);
+                    if (valJson["status"]?.ToString() == "Error")
+                    {
+                        Logger.Warn($"[AUTO-HEALING] Blocked invalid code for {target} ({partName}): {valJson["errors"]?[0]?["message"]}");
+                        return validationRes; // Return the error immediately to the LLM
+                    }
                 }
 
                 Logger.Info(string.Format("[DEBUG-SAVE] Request received for {0} (Part: {1}, Code Length: {2})", target, partName, decodedCode?.Length ?? 0));

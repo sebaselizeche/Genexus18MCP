@@ -13,11 +13,15 @@ namespace GxMcp.Worker.Services
     {
         private readonly KbService _kbService;
         private readonly ObjectService _objectService;
+        private readonly NavigationService _navigationService;
+        private readonly PatternAnalysisService _patternAnalysisService;
 
-        public DataInsightService(KbService kbService, ObjectService objectService)
+        public DataInsightService(KbService kbService, ObjectService objectService, NavigationService navigationService, PatternAnalysisService patternAnalysisService)
         {
             _kbService = kbService;
             _objectService = objectService;
+            _navigationService = navigationService;
+            _patternAnalysisService = patternAnalysisService;
         }
 
         public string GetDataContext(string target)
@@ -28,16 +32,45 @@ namespace GxMcp.Worker.Services
                 if (obj == null) return "{\"error\": \"Object not found\"}";
 
                 var result = new JObject();
-                result["name"] = obj.Name;
-                result["type"] = obj.TypeDescriptor.Name;
+                result["objectName"] = obj.Name;
+                result["objectType"] = obj.TypeDescriptor.Name;
 
-                if (obj is Transaction trn)
+                // 1. Get Tables used via Navigation Report
+                var tableSchemas = new JObject();
+                string navJson = _navigationService.GetNavigation(target);
+                if (!navJson.Contains("\"error\""))
                 {
-                    result["structure"] = GetTransactionStructure(trn);
+                    var nav = JObject.Parse(navJson);
+                    var levels = nav["levels"] as JArray;
+                    if (levels != null)
+                    {
+                        var tableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var lvl in levels)
+                        {
+                            string tblName = lvl["baseTable"]?.ToString();
+                            if (!string.IsNullOrEmpty(tblName)) tableNames.Add(tblName);
+                        }
+
+                        foreach (var tblName in tableNames)
+                        {
+                            var tbl = _objectService.FindObject(tblName) as Table;
+                            if (tbl != null) tableSchemas[tblName] = GetTableStructure(tbl);
+                        }
+                    }
                 }
-                else if (obj is Table tbl)
+                result["dataSchema"] = tableSchemas;
+
+                // 2. Variables & Local Context
+                result["variables"] = GetVariables(obj);
+
+                // 3. Pattern Context (WWP)
+                if (obj is WebPanel || obj is Transaction)
                 {
-                    result["tableInfo"] = GetTableStructure(tbl);
+                    string patternMeta = _patternAnalysisService.GetWWPStructure(target);
+                    if (!patternMeta.Contains("\"error\""))
+                    {
+                        result["patternMetadata"] = JObject.Parse(patternMeta);
+                    }
                 }
 
                 return result.ToString();
@@ -48,72 +81,45 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private JArray GetTransactionStructure(Transaction trn)
-        {
-            var levels = new JArray();
-            foreach (var level in trn.Structure.Root.Levels)
-            {
-                levels.Add(ProcessLevel(level));
-            }
-            return levels;
-        }
-
-        private JObject ProcessLevel(TransactionLevel level)
-        {
-            var item = new JObject();
-            item["name"] = level.Name;
-            item["baseTable"] = level.AssociatedTable?.Name;
-            
-            var attributes = new JArray();
-            foreach (var attr in level.Attributes)
-            {
-                attributes.Add(new JObject { ["name"] = attr.Name, ["isKey"] = attr.IsKey });
-            }
-            item["attributes"] = attributes;
-
-            if (level.Levels.Count > 0)
-            {
-                var subLevels = new JArray();
-                foreach (var sub in level.Levels) subLevels.Add(ProcessLevel(sub));
-                item["subLevels"] = subLevels;
-            }
-
-            return item;
-        }
-
         private JObject GetTableStructure(Table tbl)
         {
-            var result = new JObject();
-            result["name"] = tbl.Name;
-            result["description"] = tbl.Description;
-
-            var attributes = new JArray();
+            var res = new JObject();
+            res["description"] = tbl.Description;
+            
+            var columns = new JArray();
             foreach (var attr in tbl.TableStructure.Attributes)
             {
-                var attrObj = new JObject();
-                attrObj["name"] = attr.Name;
-                attrObj["isKey"] = attr.IsKey;
-                // Simplified for build stability
-                attributes.Add(attrObj);
+                var col = new JObject();
+                col["name"] = attr.Name;
+                col["isKey"] = attr.IsKey;
+                col["type"] = attr.Attribute.Type.ToString();
+                col["length"] = attr.Attribute.Length;
+                col["decimals"] = attr.Attribute.Decimals;
+                col["isNullable"] = attr.IsNullable.ToString();
+                columns.Add(col);
             }
-            result["attributes"] = attributes;
-
-            // Indexes temporarily removed due to SDK property mismatch
-            return result;
+            res["columns"] = columns;
+            return res;
         }
 
-        public JArray GetTablesUsed(KBObject obj)
+        private JArray GetVariables(KBObject obj)
         {
-            var tables = new JArray();
-            foreach (var reference in obj.GetReferences())
+            var vars = new JArray();
+            var part = obj.Parts.Get<VariablesPart>();
+            if (part != null)
             {
-                var target = _kbService.GetKB().DesignModel.Objects.Get(reference.To);
-                if (target is Table tbl)
+                foreach (var v in part.Variables)
                 {
-                    tables.Add(new JObject { ["name"] = tbl.Name, ["description"] = tbl.Description });
+                    var varObj = new JObject();
+                    varObj["name"] = v.Name;
+                    varObj["type"] = v.Type.ToString();
+                    varObj["length"] = v.Length;
+                    varObj["decimals"] = v.Decimals;
+                    varObj["isCollection"] = v.IsCollection;
+                    vars.Add(varObj);
                 }
             }
-            return tables;
+            return vars;
         }
     }
 }

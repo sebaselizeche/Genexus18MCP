@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
@@ -12,10 +13,12 @@ namespace GxMcp.Worker.Services
     public class WikiService
     {
         private readonly ObjectService _objectService;
+        private readonly SearchService _searchService;
 
-        public WikiService(ObjectService objectService)
+        public WikiService(ObjectService objectService, SearchService searchService)
         {
             _objectService = objectService;
+            _searchService = searchService;
         }
 
         public string Generate(string target)
@@ -33,23 +36,25 @@ namespace GxMcp.Worker.Services
                 md.AppendLine($"**Updated:** {obj.LastUpdate:yyyy-MM-dd HH:mm}");
                 md.AppendLine();
 
-                // Mermaid Call Graph
-                md.AppendLine("## Call Graph");
+                // 1. Business Intent & Role
+                md.AppendLine("## Business Role");
+                string role = InferRole(obj);
+                md.AppendLine(role);
+                md.AppendLine();
+
+                // 2. Call Graph (Direct Dependencies)
+                md.AppendLine("## Dependencies (Calls)");
                 md.AppendLine("```mermaid");
                 md.AppendLine("graph TD");
                 string selfNode = obj.Name.Replace(":", "_");
                 md.AppendLine($"  {selfNode}[{obj.Name}]");
                 
-                var references = new System.Collections.Generic.List<string>();
+                var references = new List<string>();
                 foreach(var refLink in obj.GetReferences())
                 {
-                    // Filter: Only callable objects (Prc, Trn, WebPanel)
-                    // We need to resolve the target object from the Link
-                    // Note: In SDK, references are links. Getting the target might be expensive if not careful.
-                    // Simplified: We assume we can get the name from the reference or resolve it lightly.
                     try {
                         var targetObj = refLink.To != null ? obj.Model.Objects.Get(refLink.To) : null;
-                        if (targetObj != null && (targetObj is Procedure || targetObj is Transaction || targetObj is WebPanel))
+                        if (targetObj != null && IsInteresting(targetObj))
                         {
                             string targetName = targetObj.Name;
                             string targetNode = targetName.Replace(":", "_");
@@ -61,10 +66,29 @@ namespace GxMcp.Worker.Services
                 md.AppendLine("```");
                 md.AppendLine();
 
-                // ER Diagram for Transactions
+                // 3. Inverse Dependencies (Used By)
+                md.AppendLine("## Impact Analysis (Used By)");
+                string searchRes = _searchService.Search($"usedby:\"{obj.Name}\"", null, null, 10);
+                var searchJson = JObject.Parse(searchRes);
+                var usedByList = searchJson["results"] as JArray;
+                if (usedByList != null && usedByList.Count > 0)
+                {
+                    md.AppendLine("The following objects depend on this one:");
+                    foreach (var item in usedByList)
+                    {
+                        md.AppendLine($"- **{item["name"]}** ({item["type"]})");
+                    }
+                }
+                else
+                {
+                    md.AppendLine("No direct upstream dependencies found (Potential Entry Point).");
+                }
+                md.AppendLine();
+
+                // 4. Entity Relationship (for Data-Heavy objects)
                 if (obj is Transaction trn)
                 {
-                    md.AppendLine("## Entity Relationship");
+                    md.AppendLine("## Entity Structure");
                     md.AppendLine("```mermaid");
                     md.AppendLine("erDiagram");
                     md.AppendLine($"  {trn.Name} {{");
@@ -78,12 +102,18 @@ namespace GxMcp.Worker.Services
                     md.AppendLine();
                 }
 
-                md.AppendLine("## Source Code");
+                // 5. Logic Highlights
+                md.AppendLine("## Logic Highlights");
+                string source = GetSource(target);
+                var highlights = AnalyzeLogic(source);
+                foreach(var h in highlights) md.AppendLine($"- {h}");
+                if (highlights.Count == 0) md.AppendLine("Simple logic or no highlights detected.");
+                md.AppendLine();
+
+                // 6. Source Code
+                md.AppendLine("## Source Code Snippet");
                 md.AppendLine("```genexus");
-                string sourceJson = _objectService.ReadObjectSource(target, "Source", null, null, "mcp");
-                var json = JObject.Parse(sourceJson);
-                string source = json["source"] != null ? json["source"].ToString() : "// No source available";
-                md.AppendLine(source.Length > 5000 ? source.Substring(0, 5000) + "\n// ... (truncated)" : source);
+                md.AppendLine(source.Length > 3000 ? source.Substring(0, 3000) + "\n// ... (truncated for brevity)" : source);
                 md.AppendLine("```");
 
                 // Save
@@ -92,11 +122,12 @@ namespace GxMcp.Worker.Services
                 string filePath = Path.Combine(docsDir, $"{target.Replace(":", "_")}.md");
                 File.WriteAllText(filePath, md.ToString(), Encoding.UTF8);
 
-                string depsJson = "[" + string.Join(",", references.Distinct().Select(c => "\"" + CommandDispatcher.EscapeJsonString(c) + "\"")) + "]";
-
-                return "{\"status\": \"Documentation generated\", \"file\": \"" + CommandDispatcher.EscapeJsonString(filePath) + "\","
-                     + "\"dependencies\": " + depsJson + ","
-                     + "\"markdown\": \"" + CommandDispatcher.EscapeJsonString(md.ToString()) + "\"}";
+                return JObject.FromObject(new {
+                    status = "Documentation generated",
+                    file = filePath,
+                    dependencies = references.Distinct().ToList(),
+                    markdown = md.ToString()
+                }).ToString();
             }
             catch (Exception ex)
             {
@@ -104,48 +135,47 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        public string GenerateBatch(string domainFilter)
+        private string GetSource(string target)
         {
-            try
-            {
-                var index = _objectService.GetIndex();
-                if (index == null) return "{\"error\": \"Search Index not found\"}";
-
-                var objects = index.Objects.Values
-                    .Where(o => string.Equals(o.BusinessDomain, domainFilter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (objects.Count == 0) return "{\"error\": \"No objects found for domain: " + domainFilter + "\"}";
-
-                var results = new JArray();
-                foreach (var obj in objects)
-                {
-                    string res = Generate(obj.Name);
-                    results.Add(JObject.Parse(res));
-                }
-
-                var finalResult = new JObject();
-                finalResult["domain"] = domainFilter;
-                finalResult["count"] = objects.Count;
-                finalResult["results"] = results;
-
-                return finalResult.ToString();
-            }
-            catch (Exception ex)
-            {
-                return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
-            }
+            string sourceJson = _objectService.ReadObjectSource(target, "Source", null, null, "mcp");
+            var json = JObject.Parse(sourceJson);
+            return json["source"] != null ? json["source"].ToString() : "";
         }
 
-        private string MapType(string guid)
+        private bool IsInteresting(KBObject obj)
         {
-            switch (guid)
-            {
-                case "1db606f2-af09-4cf9-a3b5-b481519d28f6": return "Transaction";
-                case "c7086606-b07c-4218-bf76-915024b3c48f": return "Procedure";
-                case "d8e1b5c4-a3f2-4b0e-9c6d-e7f8a9b0c1d2": return "WebPanel";
-                default: return "Object (" + guid + ")";
+            return obj is Procedure || obj is Transaction || obj is WebPanel || obj is Table || obj is DataProvider;
+        }
+
+        private string InferRole(KBObject obj)
+        {
+            if (obj is Transaction) return "Core Data Entity. Defines the database schema and basic validation rules.";
+            if (obj is Procedure) {
+                string src = GetSource(obj.Name).ToUpper();
+                if (src.Contains("FOR EACH")) return "Data Processor (Batch). Performs bulk operations on the database.";
+                if (src.Contains("REPORT") || src.Contains("OUTPUT")) return "Reporting Service. Generates documents or data outputs.";
+                return "Business Logic Service. Encapsulates a specific calculation or rule.";
             }
+            if (obj is WebPanel) return "User Interface. Handles user interaction and data display.";
+            return "General GeneXus Object.";
+        }
+
+        private List<string> AnalyzeLogic(string source)
+        {
+            var highlights = new List<string>();
+            string s = source.ToUpper();
+
+            if (s.Contains("FOR EACH")) highlights.Add("Contains **database loops** (For Each). Potentially high impact on performance.");
+            if (s.Contains("COMMIT")) highlights.Add("Performs explicit **Database Commits**.");
+            if (s.Contains("DELETE") && s.Contains("FOR EACH")) highlights.Add("Performs **Bulk Deletions**.");
+            if (s.Contains("UDP(")) highlights.Add("Calls **Data Providers** for data retrieval.");
+            if (s.Contains("CALL(")) highlights.Add("Orchestrates multiple external procedures.");
+            if (s.Contains("MSGBAR(") || s.Contains("CONFIRM(")) highlights.Add("Interactive logic with **User UI notifications**.");
+            
+            // Detect WWP
+            if (source.Contains("DVelop Work With Plus Pattern")) highlights.Add("Object is managed by **WorkWithPlus Pattern**.");
+
+            return highlights;
         }
     }
 }

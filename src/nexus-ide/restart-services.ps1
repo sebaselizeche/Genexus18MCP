@@ -11,13 +11,17 @@ try {
 Start-Sleep -Seconds 1
 
 # Rebuild Worker to ensure latest logic
-Write-Host "Rebuilding Worker..."
-dotnet build "C:\Projetos\GenexusMCP\src\GxMcp.Worker\GxMcp.Worker.csproj" --configuration Debug
+Write-Host "Rebuilding Worker (Release)..."
+dotnet build "C:\Projetos\GenexusMCP\src\GxMcp.Worker\GxMcp.Worker.csproj" --configuration Release
+
+# Rebuild Gateway
+Write-Host "Rebuilding Gateway (Release)..."
+dotnet build "C:\Projetos\GenexusMCP\src\GxMcp.Gateway\GxMcp.Gateway.csproj" --configuration Release
 
 # Start the Gateway
-$gatewayPath = "C:\Projetos\GenexusMCP\src\GxMcp.Gateway\bin\Debug\net8.0\GxMcp.Gateway.exe"
+$gatewayPath = "C:\Projetos\GenexusMCP\src\GxMcp.Gateway\bin\Release\net8.0\GxMcp.Gateway.exe"
 if (Test-Path $gatewayPath) {
-    Write-Host "Starting Gateway..."
+    Write-Host "Starting Gateway (Release)..."
     Start-Process $gatewayPath -WindowStyle Normal
 } else {
     Write-Error "Gateway not found at $gatewayPath"

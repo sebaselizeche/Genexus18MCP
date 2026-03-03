@@ -12,23 +12,13 @@ namespace GxMcp.Gateway.Routers
             return new object[]
             {
                 new {
-                    name = "genexus_list_objects",
-                    description = "List objects by Name, Type, or Description. Returns signatures and snippets.",
+                    name = "genexus_query",
+                    description = "Semantic search for objects, references, and snippets. Supports prefixes like 'usedby:Name', 'type:Type', and 'description:Text'.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
-                            filter = new { type = "string", description = "Search term (e.g. 'Customer')." },
-                            limit = new { type = "integer", description = "Max results.", @default = 50 }
-                        }
-                    }
-                },
-                new {
-                    name = "genexus_search",
-                    description = "Search for references (usedby:Name), connections, and source snippets.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new {
-                            query = new { type = "string", description = "Query or 'usedby:Name'." }
+                            query = new { type = "string", description = "The search query." },
+                            limit = new { type = "integer", description = "Max results (default 50).", @default = 50 }
                         },
                         required = new[] { "query" }
                     }
@@ -40,6 +30,7 @@ namespace GxMcp.Gateway.Routers
         {
             switch (toolName)
             {
+                case "genexus_query":
                 case "genexus_list_objects":
                 case "genexus_search":
                     string q = args?["query"]?.ToString() ?? args?["filter"]?.ToString() ?? "";

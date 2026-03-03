@@ -19,13 +19,10 @@ namespace GxMcp.Worker.Services
             _writeService = writeService;
         }
 
-        public string Execute(string target, string action)
+        public string Execute(string target, string action, int versionId = 0)
         {
             try
             {
-                var request = JObject.Parse(CommandDispatcher.LastRequest); // Precisamos do payload para pegar o versionId
-                int versionId = request["params"]?["versionId"]?.ToObject<int>() ?? 0;
-
                 switch (action?.ToLower())
                 {
                     case "list":
@@ -53,13 +50,11 @@ namespace GxMcp.Worker.Services
 
             try
             {
-                // PERFORMANCE: Usando FirstOrDefault para busca mais eficiente na coleção do SDK
                 var versions = obj.GetVersions().Cast<global::Artech.Architecture.Common.Objects.KBObject>().ToList();
                 var targetVersion = versions.FirstOrDefault(v => v.VersionId == versionId);
 
                 if (targetVersion != null)
                 {
-                    // Busca a parte de código (ISource)
                     var sourcePart = targetVersion.Parts.Cast<global::Artech.Architecture.Common.Objects.KBObjectPart>()
                                         .FirstOrDefault(p => p is global::Artech.Architecture.Common.Objects.ISource) 
                                         as global::Artech.Architecture.Common.Objects.ISource;
@@ -91,7 +86,6 @@ namespace GxMcp.Worker.Services
             var history = new JArray();
             try
             {
-                // Native SDK: GetVersions() returns historical versions of the object
                 var versions = obj.GetVersions().Cast<global::Artech.Architecture.Common.Objects.KBObject>();
                 foreach (var rev in versions)
                 {
@@ -128,9 +122,7 @@ namespace GxMcp.Worker.Services
             string filePath = Path.Combine(histDir, string.Format("{0}_{1}.txt", safeName, ts));
             File.WriteAllText(filePath, code, Encoding.UTF8);
 
-            long size = new FileInfo(filePath).Length;
-
-            return "{\"status\": \"Snapshot saved\", \"file\": \"" + CommandDispatcher.EscapeJsonString(Path.GetFileName(filePath)) + "\", \"timestamp\": \"" + ts + "\", \"size\": " + size + "}";
+            return "{\"status\": \"Snapshot saved\", \"file\": \"" + CommandDispatcher.EscapeJsonString(Path.GetFileName(filePath)) + "\", \"timestamp\": \"" + ts + "\"}";
         }
 
         private string RestoreSnapshot(string target)

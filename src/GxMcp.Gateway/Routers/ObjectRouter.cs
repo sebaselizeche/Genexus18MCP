@@ -1,5 +1,5 @@
 using Newtonsoft.Json.Linq;
-using System.Collections.Generic;
+using System;
 
 namespace GxMcp.Gateway.Routers
 {
@@ -12,86 +12,33 @@ namespace GxMcp.Gateway.Routers
             return new object[]
             {
                 new {
-                    name = "genexus_read_object",
-                    description = "Returns object metadata (GUID, Type, Parts). Use for structural inspection.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_read_source",
-                    description = "Reads source code. Includes variable metadata. Supports pagination (offset/limit).",
+                    name = "genexus_read",
+                    description = "Reads source code from specific object parts (Source, Rules, Events). Supports pagination.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
                             name = new { type = "string", description = "Object name." },
                             part = new { type = "string", description = "Part (Source, Rules, Events).", @default = "Source" },
                             offset = new { type = "integer", description = "Start line for pagination." },
-                            limit = new { type = "integer", description = "Lines to read." },
-                            minimize = new { type = "boolean", description = "Minimize output for large files.", @default = false }
+                            limit = new { type = "integer", description = "Lines to read." }
                         },
                         required = new[] { "name" }
                     }
                 },
                 new {
-                    name = "genexus_write_object",
-                    description = "Updates object source code. Handles automatic variable injection.",
+                    name = "genexus_edit",
+                    description = "Updates object source code. Use 'mode=full' for complete overwrite or 'mode=patch' for surgical changes.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
                             name = new { type = "string", description = "Object name." },
-                            part = new { type = "string", description = "Part name.", @default = "Source" },
-                            code = new { type = "string", description = "Full source code to write." }
+                            part = new { type = "string", description = "Part name (e.g. Source, Rules).", @default = "Source" },
+                            mode = new { type = "string", @enum = new[] { "full", "patch" }, description = "Edit mode." },
+                            content = new { type = "string", description = "New code or patch content." },
+                            context = new { type = "string", description = "For patch mode: The exact text (old_string) to replace." },
+                            operation = new { type = "string", @enum = new[] { "Replace", "Insert_After", "Append" }, description = "For patch mode: Operation to perform." }
                         },
-                        required = new[] { "name", "code" }
-                    }
-                },
-                new {
-                    name = "genexus_patch",
-                    description = "Precise text replacement/insertion. Use unique 'context' (old_string) to target lines.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new {
-                            name = new { type = "string", description = "Object name." },
-                            part = new { type = "string", description = "Part (Source, Rules, Events).", @default = "Source" },
-                            operation = new { type = "string", description = "Replace, Insert_After, Append." },
-                            content = new { type = "string", description = "New text." },
-                            context = new { type = "string", description = "Exact 'old_string' to match." },
-                            expectedCount = new { type = "integer", description = "Replacements expected. Defaults to 1.", @default = 1 }
-                        },
-                        required = new[] { "name", "operation", "content" }
-                    }
-                },
-                new {
-                    name = "genexus_get_variables",
-                    description = "Lists all variables and their types in an object.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_attribute",
-                    description = "Metadata for a GeneXus attribute (Type, Length, Table).",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Attribute name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_properties",
-                    description = "Returns the properties of an object or control.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { 
-                            name = new { type = "string", description = "Object name." },
-                            control = new { type = "string", description = "Optional control name." }
-                        },
-                        required = new[] { "name" }
+                        required = new[] { "name", "mode", "content" }
                     }
                 }
             };
@@ -99,39 +46,55 @@ namespace GxMcp.Gateway.Routers
 
         public object ConvertToolCall(string toolName, JObject args)
         {
+            string target = args?["name"]?.ToString();
+            string part = args?["part"]?.ToString() ?? "Source";
+
             switch (toolName)
             {
-                case "genexus_read_object":
-                    return new { module = "Read", action = "Export", target = args?["name"]?.ToString() };
-                case "genexus_read_source":
+                case "genexus_read":
                     return new { 
                         module = "Read", 
                         action = "ExtractSource", 
-                        target = args?["name"]?.ToString(), 
-                        part = args?["part"]?.ToString() ?? "Source",
+                        target = target, 
+                        part = part,
                         offset = args?["offset"]?.ToObject<int?>(),
-                        limit = args?["limit"]?.ToObject<int?>(),
-                        minimize = args?["minimize"]?.ToObject<bool>() ?? false
+                        limit = args?["limit"]?.ToObject<int?>()
                     };
-                case "genexus_write_object":
-                    return new { module = "Write", action = args?["part"]?.ToString() ?? "Source", target = args?["name"]?.ToString(), payload = args?["code"]?.ToString() };
+
+                case "genexus_edit":
+                    string mode = args?["mode"]?.ToString();
+                    if (mode == "patch")
+                    {
+                        return new { 
+                            module = "Patch", 
+                            action = "Apply", 
+                            target = target,
+                            part = part,
+                            operation = args?["operation"]?.ToString() ?? "Replace",
+                            content = args?["content"]?.ToString(),
+                            context = args?["context"]?.ToString(),
+                            expectedCount = 1
+                        };
+                    }
+                    else
+                    {
+                        return new { module = "Write", action = part, target = target, payload = args?["content"]?.ToString() };
+                    }
+                
+                // Aliases legados (escondidos mas funcionais para a Gateway interna se necessário)
+                case "genexus_read_source":
+                    return new { module = "Read", action = "ExtractSource", target = target, part = part };
                 case "genexus_patch":
-                    return new { 
-                        module = "Patch", 
-                        action = "Apply", 
-                        target = args?["name"]?.ToString(),
-                        part = args?["part"]?.ToString() ?? "Source",
-                        operation = args?["operation"]?.ToString(),
-                        content = args?["content"]?.ToString(),
-                        context = args?["context"]?.ToString(),
-                        expectedCount = args?["expectedCount"]?.ToObject<int?>() ?? 1
-                    };
+                    return new { module = "Patch", action = "Apply", target = target, part = part, operation = args?["operation"]?.ToString(), content = args?["content"]?.ToString(), context = args?["context"]?.ToString() };
+                case "genexus_write_object":
+                    return new { module = "Write", action = part, target = target, payload = args?["code"]?.ToString() };
                 case "genexus_get_variables":
-                    return new { module = "Read", action = "GetVariables", target = args?["name"]?.ToString() };
+                    return new { module = "Read", action = "GetVariables", target = target };
                 case "genexus_get_attribute":
-                    return new { module = "Read", action = "GetAttribute", target = args?["name"]?.ToString() };
+                    return new { module = "Read", action = "GetAttribute", target = target };
                 case "genexus_get_properties":
-                    return new { module = "Property", action = "Get", target = args?["name"]?.ToString(), control = args?["control"]?.ToString() };
+                    return new { module = "Property", action = "Get", target = target, control = args?["control"]?.ToString() };
+
                 default:
                     return null;
             }

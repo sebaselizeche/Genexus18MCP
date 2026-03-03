@@ -14,20 +14,20 @@ namespace GxMcp.Worker.Services
     {
         private SearchIndex _index;
         private string _indexPath;
-        private readonly BuildService _buildService;
+        private BuildService _buildService;
         private bool _initialized = false;
         private readonly object _lock = new object();
         private string _lastSavedJsonHash = null;
         private DateTime _lastFlushTime = DateTime.MinValue;
         private bool _savingInProgress = false;
 
-        public IndexCacheService(BuildService buildService)
+        public IndexCacheService()
         {
-            _buildService = buildService;
             _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
         }
 
-        public KbService KbService => _buildService.KbService;
+        public void SetBuildService(BuildService bs) { _buildService = bs; }
+        public KbService KbService => _buildService?.KbService;
 
         private void EnsureInitialized()
         {

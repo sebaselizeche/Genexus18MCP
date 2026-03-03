@@ -1,5 +1,7 @@
 using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace GxMcp.Gateway.Routers
 {
@@ -12,105 +14,35 @@ namespace GxMcp.Gateway.Routers
             return new object[]
             {
                 new {
-                    name = "genexus_analyze",
-                    description = "Static analysis: complexity, anti-patterns, and business logic insights.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_ui_context",
-                    description = "Returns controls and layout structure for Web Panels/Transactions.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_data_context",
-                    description = "Returns base table, extended table, and relationships for an object.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_hierarchy",
-                    description = "Returns call tree (callers/callees).",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string" } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_linter",
-                    description = "Checks source code for anti-patterns (commits in loops, etc).",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name to lint." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_translate_to",
-                    description = "Translates a GeneXus object structure/logic to another language (C#, TS, etc).",
+                    name = "genexus_inspect",
+                    description = "Comprehensive object inspection. Returns metadata, variables, structure, and signature in a single call.",
                     inputSchema = new {
                         type = "object",
                         properties = new { 
                             name = new { type = "string", description = "Object name." },
-                            language = new { type = "string", description = "Target language (cs, ts)." }
+                            include = new { 
+                                type = "array", 
+                                items = new { type = "string", @enum = new[] { "metadata", "variables", "signature", "structure" } },
+                                description = "Specific parts to include (defaults to all)."
+                            }
                         },
-                        required = new[] { "name", "language" }
-                    }
-                },
-                new {
-                    name = "genexus_get_signature",
-                    description = "Returns the parm() rule and signature for an object.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
                         required = new[] { "name" }
                     }
                 },
                 new {
-                    name = "genexus_get_conversion_context",
-                    description = "Consolidates all metadata (Source, Rules, Conditions, Variables) into one call for AI analysis/conversion.",
+                    name = "genexus_analyze",
+                    description = "Deep semantic and structural analysis using various specialized engines.",
                     inputSchema = new {
                         type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_structure",
-                    description = "Extracts logical structure (Subs and Events) from object source code. Helps orient before reading full logic.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_navigation",
-                    description = "Returns the navigation report (plan) for an object, including Base Table, Order, and Index used.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name." } },
-                        required = new[] { "name" }
-                    }
-                },
-                new {
-                    name = "genexus_get_pattern_metadata",
-                    description = "Extracts Pattern-specific properties (templates, tab structures, grids) for WWP objects.",
-                    inputSchema = new {
-                        type = "object",
-                        properties = new { name = new { type = "string", description = "Object name (Transaction or WWP Instance)." } },
-                        required = new[] { "name" }
+                        properties = new { 
+                            name = new { type = "string", description = "Object name." },
+                            mode = new { 
+                                type = "string", 
+                                @enum = new[] { "linter", "navigation", "hierarchy", "impact", "data_context", "ui_context", "pattern_metadata" },
+                                description = "The type of analysis to perform."
+                            }
+                        },
+                        required = new[] { "name", "mode" }
                     }
                 }
             };
@@ -118,30 +50,45 @@ namespace GxMcp.Gateway.Routers
 
         public object ConvertToolCall(string toolName, JObject args)
         {
+            string target = args?["name"]?.ToString();
+            
             switch (toolName)
             {
+                case "genexus_inspect":
+                    // Por padrão, se não especificar, o GetConversionContext já traz quase tudo.
+                    // Para manter a compatibilidade interna, usamos o module Analyze.
+                    return new { module = "Analyze", action = "GetConversionContext", target = target };
+
                 case "genexus_analyze":
-                    return new { module = "Analyze", action = "Analyze", target = args?["name"]?.ToString() };
-                case "genexus_get_data_context":
-                    return new { module = "Analyze", action = "GetDataContext", target = args?["name"]?.ToString() };
-                case "genexus_get_ui_context":
-                    return new { module = "UI", action = "GetUIContext", target = args?["name"]?.ToString() };
-                case "genexus_get_hierarchy":
-                    return new { module = "Analyze", action = "GetHierarchy", target = args?["name"]?.ToString() };
-                case "genexus_linter":
-                    return new { module = "Linter", action = "Analyze", target = args?["name"]?.ToString() };
-                case "genexus_translate_to":
-                    return new { module = "Analyze", action = "TranslateTo", target = args?["name"]?.ToString(), language = args?["language"]?.ToString() };
+                    string mode = args?["mode"]?.ToString();
+                    switch (mode)
+                    {
+                        case "linter":
+                            return new { module = "Linter", action = "Analyze", target = target };
+                        case "navigation":
+                            return new { module = "Analyze", action = "GetNavigation", target = target };
+                        case "hierarchy":
+                            return new { module = "Analyze", action = "GetHierarchy", target = target };
+                        case "impact":
+                            return new { module = "Analyze", action = "Analyze", target = target };
+                        case "data_context":
+                            return new { module = "Analyze", action = "GetDataContext", target = target };
+                        case "ui_context":
+                            return new { module = "UI", action = "GetUIContext", target = target };
+                        case "pattern_metadata":
+                            return new { module = "Analyze", action = "GetPatternMetadata", target = target };
+                        default:
+                            return new { module = "Analyze", action = "Analyze", target = target };
+                    }
+                
+                // Aliases legados (para compatibilidade se algo chamar via tool call)
                 case "genexus_get_signature":
-                    return new { module = "Analyze", action = "GetParameters", target = args?["name"]?.ToString() };
-                case "genexus_get_conversion_context":
-                    return new { module = "Analyze", action = "GetConversionContext", target = args?["name"]?.ToString() };
-                case "genexus_get_structure":
-                    return new { module = "Structure", action = "GetLogicStructure", target = args?["name"]?.ToString() };
+                    return new { module = "Analyze", action = "GetParameters", target = target };
+                case "genexus_linter":
+                    return new { module = "Linter", action = "Analyze", target = target };
                 case "genexus_get_navigation":
-                    return new { module = "Analyze", action = "GetNavigation", target = args?["name"]?.ToString() };
-                case "genexus_get_pattern_metadata":
-                    return new { module = "Analyze", action = "GetPatternMetadata", target = args?["name"]?.ToString() };
+                    return new { module = "Analyze", action = "GetNavigation", target = target };
+                
                 default:
                     return null;
             }
