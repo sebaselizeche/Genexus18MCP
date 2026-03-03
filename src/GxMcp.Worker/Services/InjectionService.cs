@@ -18,9 +18,12 @@ namespace GxMcp.Worker.Services
             _objectService = objectService;
         }
 
-        public string InjectContext(string targetName)
+        public string InjectContext(string targetName, bool recursive = false)
         {
             var sb = new StringBuilder();
+            var processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var depsList = new List<DependencyInfo>();
+
             try
             {
                 var kb = _kbService.GetKB();
@@ -32,7 +35,7 @@ namespace GxMcp.Worker.Services
                 sb.AppendLine($"# Context for {obj.TypeDescriptor.Name} {obj.Name}");
                 sb.AppendLine();
 
-                // Self signature
+                // Self signature / Structure
                 try {
                     var sigResult = _objectService.GetParametersInternal(obj);
                     if (!string.IsNullOrEmpty(sigResult.parmRule))
@@ -43,105 +46,31 @@ namespace GxMcp.Worker.Services
                         sb.AppendLine("```");
                         sb.AppendLine();
                     }
-                } catch (Exception sigEx) {
-                    Logger.Error("InjectContext sig error: " + sigEx.Message);
-                }
 
-                // Direct Dependencies via GetReferences
-                var depsList = new List<DependencyInfo>();
-                var processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                
-                foreach (var reference in obj.GetReferences())
-                {
-                    try
-                    {
-                        var target = kb.DesignModel.Objects.Get(reference.To);
-                        if (target == null) continue;
-
-                        string tName = target.Name;
-                        string type = target.TypeDescriptor.Name;
-
-                        // Skip if already processed or if it's a non-useful type
-                        if (processed.Contains(tName)) continue;
-                        processed.Add(tName);
-
-                        // Only include SDTs, Procedures, Transactions, DataProviders
-                        if (type != "SDT" && type != "Procedure" && type != "Transaction" && type != "DataProvider") continue;
-
-                        string content = null;
-
-                        if (type == "SDT")
-                        {
-                            // Use the index cache snippet if available
-                            var index = _objectService.GetIndex();
-                            if (index != null)
-                            {
-                                string key = string.Format("{0}:{1}", type, tName);
-                                if (index.Objects.TryGetValue(key, out var entry) && !string.IsNullOrEmpty(entry.SourceSnippet))
-                                {
-                                    content = entry.SourceSnippet;
-                                    Logger.Info($"InjectContext: SDT {tName} resolved from cache ({content.Length} chars)");
+                    // Elite: If target is BC, inject its structure too
+                    if (obj.TypeDescriptor.Name == "Transaction") {
+                        try {
+                            dynamic trn = obj;
+                            if (trn.IsBusinessComponent) {
+                                string bcStruct = StructureParser.SerializeToText(obj);
+                                if (!string.IsNullOrEmpty(bcStruct)) {
+                                    sb.AppendLine("## Business Component Structure");
+                                    sb.AppendLine("```");
+                                    sb.AppendLine(bcStruct);
+                                    sb.AppendLine("```");
+                                    sb.AppendLine();
                                 }
                             }
-                            // Fallback 1: StructureParser
-                            if (string.IsNullOrEmpty(content))
-                            {
-                                string actualType = target.TypeDescriptor?.Name ?? "null";
-                                Logger.Info($"InjectContext: SDT {tName} not in cache, trying StructureParser (actualType={actualType})");
-                                try {
-                                    content = StructureParser.SerializeToText(target);
-                                    if (!string.IsNullOrEmpty(content))
-                                        Logger.Info($"InjectContext: StructureParser produced {content.Length} chars for SDT {tName}");
-                                    else
-                                        Logger.Info($"InjectContext: StructureParser returned empty for SDT {tName}");
-                                } catch (Exception spEx) {
-                                    Logger.Error($"InjectContext: StructureParser failed for SDT {tName}: {spEx.Message}");
-                                }
-                            }
-                            // Fallback 2: SDTService (does its own FindObject lookup)
-                            if (string.IsNullOrEmpty(content))
-                            {
-                                try {
-                                    var sdtSvc = new SDTService(_objectService);
-                                    string sdtJson = sdtSvc.GetSDTStructure(tName);
-                                    Logger.Info($"InjectContext: SDTService for {tName} returned {sdtJson?.Length ?? 0} chars");
-                                    if (!string.IsNullOrEmpty(sdtJson) && !sdtJson.StartsWith("{\"error\""))
-                                        content = sdtJson;
-                                } catch (Exception sdtEx) {
-                                    Logger.Error($"InjectContext: SDTService failed for {tName}: {sdtEx.Message}");
-                                }
-                            }
-                            // Final fallback: just note it exists
-                            if (string.IsNullOrEmpty(content))
-                                content = $"SDT {tName} (structure unavailable)";
-                        }
-                        else
-                        {
-                            // Procedure / Transaction / DataProvider: extract parm rule
-                            try {
-                                var pResult = _objectService.GetParametersInternal(target);
-                                if (!string.IsNullOrEmpty(pResult.parmRule))
-                                {
-                                    var paramSb = new StringBuilder();
-                                    paramSb.AppendLine(pResult.parmRule);
-                                    foreach (var p in pResult.parameters)
-                                        paramSb.AppendLine($"  {p.Accessor} {p.Name} : {p.Type}");
-                                    content = paramSb.ToString().TrimEnd();
-                                }
-                            } catch { }
-                        }
-
-                        if (!string.IsNullOrEmpty(content))
-                        {
-                            depsList.Add(new DependencyInfo { Name = tName, Type = type, Content = content });
-                        }
+                        } catch {}
                     }
-                    catch { }
-
-                    if (depsList.Count >= 10) break;
+                } catch (Exception sigEx) {
+                    Logger.Error("InjectContext sig/bc error: " + sigEx.Message);
                 }
 
-                Logger.Info($"InjectContext: {targetName} -> {depsList.Count} deps injected from {processed.Count} unique refs");
+                // Collect dependencies
+                CollectDependencies(obj, kb, processed, depsList, recursive ? 2 : 1);
+
+                Logger.Info($"InjectContext: {targetName} -> {depsList.Count} deps injected (recursive={recursive})");
 
                 if (depsList.Count > 0)
                 {
@@ -164,6 +93,123 @@ namespace GxMcp.Worker.Services
                 sb.AppendLine($"> Fatal Error: {ex.Message}");
                 return sb.Length > 0 ? sb.ToString() : "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private void CollectDependencies(KBObject obj, dynamic kb, HashSet<string> processed, List<DependencyInfo> depsList, int depth)
+        {
+            if (depth <= 0) return;
+            if (depsList.Count >= 20) return; // Limit to avoid token bloom
+
+            foreach (var reference in obj.GetReferences())
+            {
+                try
+                {
+                    var target = kb.DesignModel.Objects.Get(reference.To);
+                    if (target == null) continue;
+
+                    string tName = target.Name;
+                    string type = target.TypeDescriptor.Name;
+
+                    // Skip if already processed or if it's a non-useful type
+                    if (processed.Contains(tName)) continue;
+                    processed.Add(tName);
+
+                    // Only include SDTs, Procedures, Transactions, DataProviders
+                    bool isUseful = (type == "SDT" || type == "Procedure" || type == "Transaction" || type == "DataProvider");
+                    if (!isUseful) continue;
+
+                    string content = null;
+                    string displayType = type;
+
+                    if (type == "SDT")
+                    {
+                        content = GetSDTContent(target, tName);
+                    }
+                    else if (type == "Transaction")
+                    {
+                        // Check if it's a Business Component
+                        try {
+                            dynamic trn = target;
+                            if (trn.BusinessComponent) {
+                                displayType = "BusinessComponent";
+                                content = StructureParser.SerializeToText(target);
+                            }
+                        } catch {}
+                        
+                        // If not BC or structure extraction failed, just get parm
+                        if (string.IsNullOrEmpty(content))
+                            content = GetSignatureContent(target);
+                    }
+                    else
+                    {
+                        // Procedure / DataProvider: extract parm rule
+                        content = GetSignatureContent(target);
+                    }
+
+                    if (!string.IsNullOrEmpty(content))
+                    {
+                        depsList.Add(new DependencyInfo { Name = tName, Type = displayType, Content = content });
+                        
+                        // Recurse if needed
+                        if (depth > 1)
+                        {
+                            CollectDependencies(target, kb, processed, depsList, depth - 1);
+                        }
+                    }
+                }
+                catch { }
+
+                if (depsList.Count >= 20) break;
+            }
+        }
+
+        private string GetSDTContent(KBObject target, string tName)
+        {
+            string content = null;
+            // Use the index cache snippet if available
+            var index = _objectService.GetIndex();
+            if (index != null)
+            {
+                string key = string.Format("SDT:{0}", tName);
+                if (index.Objects.TryGetValue(key, out var entry) && !string.IsNullOrEmpty(entry.SourceSnippet))
+                {
+                    return entry.SourceSnippet;
+                }
+            }
+
+            // Fallback 1: StructureParser
+            try {
+                content = StructureParser.SerializeToText(target);
+            } catch { }
+
+            // Fallback 2: SDTService
+            if (string.IsNullOrEmpty(content))
+            {
+                try {
+                    var sdtSvc = new SDTService(_objectService);
+                    string sdtJson = sdtSvc.GetSDTStructure(tName);
+                    if (!string.IsNullOrEmpty(sdtJson) && !sdtJson.StartsWith("{\"error\""))
+                        content = sdtJson;
+                } catch { }
+            }
+
+            return content ?? $"SDT {tName} (structure unavailable)";
+        }
+
+        private string GetSignatureContent(KBObject target)
+        {
+            try {
+                var pResult = _objectService.GetParametersInternal(target);
+                if (!string.IsNullOrEmpty(pResult.parmRule))
+                {
+                    var paramSb = new StringBuilder();
+                    paramSb.AppendLine(pResult.parmRule);
+                    foreach (var p in pResult.parameters)
+                        paramSb.AppendLine($"  {p.Accessor} {p.Name} : {p.Type}");
+                    return paramSb.ToString().TrimEnd();
+                }
+            } catch { }
+            return null;
         }
 
         private class DependencyInfo

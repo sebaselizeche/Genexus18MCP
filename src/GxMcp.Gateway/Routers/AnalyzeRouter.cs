@@ -86,7 +86,8 @@ namespace GxMcp.Gateway.Routers
                     return new { module = "Analyze", action = "Summarize", target = target };
                 
                 case "genexus_inject_context":
-                    return new { module = "Analyze", action = "InjectContext", target = target };
+                    bool recursive = args?["recursive"]?.Value<bool>() ?? false;
+                    return new { module = "Analyze", action = "InjectContext", target = target, recursive = recursive };
 
                 case "genexus_analyze":
                     string mode = args?["mode"]?.ToString();

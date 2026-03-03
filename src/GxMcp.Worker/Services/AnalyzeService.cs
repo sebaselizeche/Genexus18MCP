@@ -356,7 +356,47 @@ namespace GxMcp.Worker.Services
                 // 5. Get WWP Metadata
                 result["wwpMetadata"] = GetWWPMetadata(obj);
 
-                // 6. Generate Semantic Summary
+                // 6. Get Domains
+                var domains = new JArray();
+                var processedDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try {
+                    dynamic vPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.GetType().Name.Equals("VariablesPart"));
+                    if (vPart != null) {
+                        foreach (var v in vPart.Variables) {
+                            try {
+                                dynamic dv = v;
+                                var domain = dv.Domain;
+                                
+                                // Elite: If variable not directly based on domain, check its attribute
+                                if (domain == null && dv.Attribute != null) domain = dv.Attribute.Domain;
+
+                                if (domain != null) {
+                                    string dName = domain.Name;
+                                    if (!processedDomains.Contains(dName)) {
+                                        processedDomains.Add(dName);
+                                        var dObj = new JObject();
+                                        dObj["name"] = dName;
+                                        var values = new JArray();
+                                        try {
+                                            dynamic dom = domain;
+                                            foreach (var ev in dom.EnumValues) {
+                                                var valObj = new JObject();
+                                                valObj["name"] = ev.Name;
+                                                valObj["value"] = ev.Value;
+                                                values.Add(valObj);
+                                            }
+                                        } catch { }
+                                        dObj["values"] = values;
+                                        domains.Add(dObj);
+                                    }
+                                }
+                            } catch { }
+                        }
+                    }
+                } catch {}
+                result["domains"] = domains;
+
+                // 7. Generate Semantic Summary
                 result["summary"] = GenerateSummary(obj, result);
 
                 return result.ToString();

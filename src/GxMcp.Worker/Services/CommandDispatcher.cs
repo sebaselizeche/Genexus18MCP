@@ -176,7 +176,11 @@ namespace GxMcp.Worker.Services
                         if (action == "GetConversionContext") return _analyzeService.GetConversionContext(target);
                         if (action == "GetPatternMetadata") return _patternAnalysisService.GetWWPStructure(target);
                         if (action == "Summarize") return _summarizeService.Summarize(target);
-                        if (action == "InjectContext") return _injectionService.InjectContext(target);
+                        if (action == "InjectContext") 
+                        {
+                            bool recursive = args?["recursive"]?.ToObject<bool>() ?? false;
+                            return _injectionService.InjectContext(target, recursive);
+                        }
                         return _analyzeService.Analyze(target);
                     case "linter":
                         return _linterService.Lint(target);

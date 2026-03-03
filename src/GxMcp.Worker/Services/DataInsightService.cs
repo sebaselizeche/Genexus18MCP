@@ -37,6 +37,7 @@ namespace GxMcp.Worker.Services
 
                 // 1. Get Tables used via Navigation Report
                 var tableSchemas = new JObject();
+                var tableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string navJson = _navigationService.GetNavigation(target);
                 if (!navJson.Contains("\"error\""))
                 {
@@ -44,19 +45,39 @@ namespace GxMcp.Worker.Services
                     var levels = nav["levels"] as JArray;
                     if (levels != null)
                     {
-                        var tableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var lvl in levels)
                         {
                             string tblName = lvl["baseTable"]?.ToString();
                             if (!string.IsNullOrEmpty(tblName)) tableNames.Add(tblName);
                         }
-
-                        foreach (var tblName in tableNames)
-                        {
-                            var tbl = _objectService.FindObject(tblName) as Table;
-                            if (tbl != null) tableSchemas[tblName] = GetTableStructure(tbl);
-                        }
                     }
+                }
+
+                // Fallback: Check Direct References for any Table (Crucial for Elite Context when NVG missing)
+                if (tableNames.Count == 0)
+                {
+                    foreach (var reference in obj.GetReferences())
+                    {
+                        try {
+                            var kb = _kbService.GetKB();
+                            var refObj = kb.DesignModel.Objects.Get(reference.To);
+                            if (refObj is Table tblRef) 
+                                tableNames.Add(tblRef.Name);
+                        } catch {}
+                    }
+
+                    // Fallback 2: If it's a Transaction, check for a table with the same name
+                    if (tableNames.Count == 0 && obj is Transaction)
+                    {
+                        var tbl = _objectService.FindObject(obj.Name) as Table;
+                        if (tbl != null) tableNames.Add(tbl.Name);
+                    }
+                }
+
+                foreach (var tblName in tableNames)
+                {
+                    var tbl = _objectService.FindObject(tblName) as Table;
+                    if (tbl != null) tableSchemas[tblName] = GetTableStructure(tbl);
                 }
                 result["dataSchema"] = tableSchemas;
 
