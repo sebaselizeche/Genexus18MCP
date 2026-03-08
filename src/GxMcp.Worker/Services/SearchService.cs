@@ -87,25 +87,35 @@ namespace GxMcp.Worker.Services
                 var queryEmbedding = _vectorService.ComputeEmbedding(query);
 
                 var scoredResults = queryResults
-                    .Select(entry => {
+                    .Select(entry =>
+                    {
                         int score = 0;
                         float vectorScore = 0;
-                        if (entry.Embedding != null && queryEmbedding != null)
+
+                        if (criteria.Terms.Count > 0)
                         {
-                            vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
-                        }
-
-                        if (criteria.Terms.Count > 0) {
                             score = CalculateSemanticScore(entry, criteria.Terms);
-                            if (score <= 0 && vectorScore < 0.5f) return new RankedResult { Score = -1 };
-                        } else {
-                            score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1;
+
+                            // SHORT-CIRCUIT: If exact keyword match failed entirely and it's a structural container, skip vector math entirely
+                            if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
+                                return new RankedResult { Score = -1 };
+
+                            if (entry.Embedding != null && queryEmbedding != null)
+                            {
+                                vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
+                            }
+                            if (score <= 0 && vectorScore < 0.45f)
+                                return new RankedResult { Score = -1 };
+                        }
+                        else
+                        {
+                            score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; // Default browsing order
                         }
 
-                        // Combine traditional + vector score (vector is 0-1, we scale it)
                         int finalScore = score + (int)(vectorScore * 1000);
                         return new RankedResult { Entry = entry, Score = finalScore, VectorSimilarity = vectorScore };
                     })
+                    .Where(r => r != null) // Safety check
                     .Where(r => r.Score > 0)
                     .OrderByDescending(r => r.Score)
                     .ThenBy(r => r.Entry.Name)

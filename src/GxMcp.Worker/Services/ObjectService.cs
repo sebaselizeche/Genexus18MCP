@@ -358,21 +358,38 @@ namespace GxMcp.Worker.Services
 
         private void ProcessSourceContent(KBObject obj, string content, int? offset, int? limit, JObject result, string client = "ide")
         {
+            string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+            int totalLines = lines.Length;
+
+            // AUTO-TRUNCATION for MCP: If no limits were provided but the file is huge (over 2500 lines)
+            if (!offset.HasValue && !limit.HasValue && client == "mcp" && totalLines > 2500)
+            {
+                offset = 0;
+                limit = 2500;
+                result["isTruncatedByWorker"] = true;
+                result["message"] = "File is extremely large. Truncated to 2500 lines to prevent IPC buffer overflow. Use genexus_read with offset/limit to read more.";
+            }
+
             if (offset.HasValue || limit.HasValue)
             {
-                string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
                 int start = offset ?? 0;
-                int count = limit ?? (lines.Length - start);
+                int count = limit ?? (totalLines - start);
 
                 if (start < 0) start = 0;
-                if (start >= lines.Length) count = 0;
-                else if (start + count > lines.Length) count = lines.Length - start;
+                if (start >= totalLines) count = 0;
+                else if (start + count > totalLines) count = totalLines - start;
 
                 string paginatedContent = string.Join(Environment.NewLine, lines.Skip(start).Take(count));
+
+                if (count < totalLines && start + count < totalLines && !result.ContainsKey("isTruncatedByWorker"))
+                {
+                    paginatedContent += "\n\n// ... [CONTENT TRUNCATED. USE PAGINATION (offset/limit) TO READ FURTHER] ... //\n";
+                }
+
                 ProcessTextResponse(paginatedContent, result, client);
                 result["offset"] = start;
                 result["limit"] = count;
-                result["totalLines"] = lines.Length;
+                result["totalLines"] = totalLines;
 
                 AddVariableMetadata(obj, paginatedContent, result);
                 AddCallSignatures(obj, paginatedContent, result);
