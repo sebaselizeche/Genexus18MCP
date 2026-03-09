@@ -50,9 +50,10 @@ namespace GxMcp.Worker.Helpers
                     File.AppendAllText(LogFile, line + Environment.NewLine);
                 }
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[Logger File Error] {ex.Message}");
+            catch 
+            { 
+                // Silent fallback to prevent worker crash if disk is full/locked
+                // We already sent the log to Console.Error above
             }
         }
     }
