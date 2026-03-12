@@ -30,6 +30,22 @@ namespace GxMcp.Worker.Services
         public void SetBuildService(BuildService bs) { _buildService = bs; }
         public KbService KbService => _buildService?.KbService;
 
+        public bool IsIndexMissing
+        {
+            get
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(_indexPath)) return true;
+                    if (!File.Exists(_indexPath)) return true;
+                    
+                    var index = GetIndex();
+                    return index == null || index.Objects.Count == 0;
+                }
+                catch { return true; }
+            }
+        }
+
         private void EnsureInitialized()
         {
             if (_initialized) return;

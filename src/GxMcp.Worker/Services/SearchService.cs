@@ -24,6 +24,9 @@ namespace GxMcp.Worker.Services
         {
             try
             {
+                if (_indexCacheService.IsIndexMissing) 
+                    return "{\"error\": \"Index missing. Please run genexus_lifecycle(action='index') to build the search index before using this tool.\"}";
+
                 var index = _indexCacheService.GetIndex();
                 if (index == null || index.Objects.Count == 0) return "{\"error\": \"Index empty.\"}";
 

@@ -1,7 +1,7 @@
 [
   {
     "name": "genexus_query",
-    "description": "Semantic search for objects, references, and snippets. Supports prefixes like 'usedby:Name', 'type:Type', and 'description:Text'.",
+    "description": "Semantic search for objects, references, and snippets. Supports prefixes like 'usedby:Name', 'type:Type', and 'description:Text'. NOTE: If this tool returns 'Index missing', you MUST run genexus_lifecycle(action='index') before searching again.",
     "inputSchema": {
       "type": "object",
       "properties": {

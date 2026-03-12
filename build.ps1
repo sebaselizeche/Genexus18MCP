@@ -12,6 +12,17 @@ Write-Host "   > Stopping running processes..."
 Stop-Process -Name GxMcp.Worker -ErrorAction SilentlyContinue
 Stop-Process -Name GxMcp.Gateway -ErrorAction SilentlyContinue
 
+# Also stop dotnet processes running the Gateway (since we use 'dotnet GxMcp.Gateway.dll')
+Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" | 
+    Where-Object { $_.CommandLine -like "*GxMcp.Gateway.dll*" } | 
+    ForEach-Object { 
+        Write-Host "     - Stopping dotnet process ($($_.ProcessId))..."
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue 
+    }
+
+# Brief wait to ensure files are released
+Start-Sleep -Seconds 1
+
 $ErrorActionPreference = "Stop"
 
 # 1. Clean Publish Directory
@@ -116,7 +127,7 @@ if (-not (Test-Path "$publishDir\config.json")) {
 
 # 6. Generate start_mcp.bat (Launcher for Platform)
 Write-Host "   > Generating start_mcp.bat..."
-$batContent = "@echo off`r`ncd /d ""%~dp0""`r`nGxMcp.Gateway.exe`r`n"
+$batContent = "@echo off`r`ncd /d ""%~dp0""`r`ndotnet GxMcp.Gateway.dll`r`n"
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
 Write-Host "`n✅ Build Complete!" -ForegroundColor Green

@@ -87,53 +87,46 @@ namespace GxMcp.Worker.Services
 
         public string BulkIndex()
         {
-            Logger.Info("BulkIndex() requested (Diagnostic Mode).");
+            Logger.Info("BulkIndex() requested.");
             if (_isIndexing) return "{\"status\":\"Already in progress\"}";
 
             _isIndexing = true;
             _processedCount = 0;
             _totalCount = 0;
-            _currentStatus = "Querying Database...";
+            _currentStatus = "Scanning objects...";
 
             Program.BackgroundQueue.Enqueue(() => {
                 try {
                     dynamic kb = GetKB();
                     if (kb == null) { _isIndexing = false; return; }
                     
-                    // [DIAG] Use the exact property name found via reflection
-                    string connStr = "";
-                    try {
-                        dynamic connInfo = kb.ConnectionInfo;
-                        connStr = connInfo.ConnectionStringFull; // FOUND!
-                    } catch {}
+                    var allObjects = kb.DesignModel.Objects.GetAll();
+                    // Ensure we cast to IEnumerable if it's dynamic to use Linq
+                    var objectList = ((System.Collections.IEnumerable)allObjects).Cast<global::Artech.Architecture.Common.Objects.KBObject>();
+                    
+                    _totalCount = objectList.Count();
+                    _currentStatus = $"Indexing {_totalCount} objects...";
+                    Logger.Info(_currentStatus);
 
-                    if (string.IsNullOrEmpty(connStr)) {
-                        Logger.Error("[SQL-DIAG] ConnectionStringFull not found on kb.ConnectionInfo");
-                        _isIndexing = false; return;
-                    }
-
-                    Logger.Info("[SQL-DIAG] Executing Definitive Count Query...");
-                    using (var conn = new System.Data.SqlClient.SqlConnection(connStr)) {
-                        conn.Open();
-                        var cmd = new System.Data.SqlClient.SqlCommand(
-                            "SELECT T.EntityTypeName as TypeName, COUNT(*) as Qty " +
-                            "FROM dbo.Entity E " +
-                            "JOIN dbo.EntityType T ON E.EntityTypeId = T.EntityTypeId " +
-                            "GROUP BY T.EntityTypeName ORDER BY Qty DESC", conn);
-                        
-                        using (var reader = cmd.ExecuteReader()) {
-                            Logger.Info("[SQL-DIAG] --- THE TRUTH: PHYSICAL OBJECT COUNT ---");
-                            while (reader.Read()) {
-                                Logger.Info(string.Format("[SQL-DIAG] {0}: {1}", reader["TypeName"], reader["Qty"]));
+                    foreach (var obj in objectList)
+                    {
+                        try {
+                            _indexCacheService.UpdateEntry(obj);
+                            _processedCount++;
+                            if (_processedCount % 100 == 0) {
+                                _currentStatus = $"Processed {_processedCount}/{_totalCount}";
+                                Logger.Info(_currentStatus);
                             }
+                        } catch (Exception ex) {
+                            Logger.Error($"Error indexing object {obj.Name}: {ex.Message}");
                         }
                     }
-                    _currentStatus = "Complete";
 
                     _currentStatus = "Complete";
                     _isIndexing = false;
+                    Logger.Info("BulkIndex completed successfully.");
                 } catch (Exception ex) {
-                    Logger.Error("[SQL-DIAG] FATAL: " + ex.Message);
+                    Logger.Error("BulkIndex FATAL: " + ex.Message);
                     _isIndexing = false;
                     _currentStatus = "Error: " + ex.Message;
                 }
